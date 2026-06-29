@@ -1,4 +1,4 @@
-package org.example.flowos.Auth;
+package org.example.flowos.Auth.Config;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -20,7 +20,7 @@ public class JwtUtil
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
-    public String generateToken(UUID userId)
+    public String generateAccessToken(UUID userId)
     {
 
         return Jwts.

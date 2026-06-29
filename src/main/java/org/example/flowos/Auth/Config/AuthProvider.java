@@ -1,4 +1,4 @@
-package org.example.flowos.Auth;
+package org.example.flowos.Auth.Config;
 
 public enum AuthProvider
 {

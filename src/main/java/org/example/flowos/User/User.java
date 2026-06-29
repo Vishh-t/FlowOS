@@ -4,8 +4,7 @@ import jakarta.annotation.Nullable;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
 import lombok.*;
-import org.example.flowos.Auth.AuthProvider;
-import org.springframework.data.annotation.CreatedDate;
+import org.example.flowos.Auth.Config.AuthProvider;
 
 import java.time.Instant;
 import java.util.UUID;

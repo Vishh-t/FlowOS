@@ -1,4 +1,4 @@
-package org.example.flowos.Auth;
+package org.example.flowos.Auth.Config;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
