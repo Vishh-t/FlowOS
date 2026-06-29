@@ -1,20 +1,15 @@
 package org.example.flowos.Auth.Dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.UUID;
-
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class LoginAndSignUpResponseDTO
+public class RefreshTokenRequestDTO
 {
-
-    private String accessToken;
+    @NotBlank
     private String refreshToken;
-    private UUID userID;
-    private String name;
-
 }

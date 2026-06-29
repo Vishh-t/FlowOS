@@ -3,6 +3,7 @@ package org.example.flowos.Auth.Controller;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.flowos.Auth.Dto.LogInDTO;
+import org.example.flowos.Auth.Dto.RefreshTokenRequestDTO;
 import org.example.flowos.Auth.Dto.SignUpDTO;
 import org.example.flowos.Auth.Services.AuthService;
 import org.springframework.http.HttpStatus;
@@ -29,6 +30,17 @@ public class AuthController
     public ResponseEntity<?> logIn(@Valid @RequestBody LogInDTO dto)
     {
         return new ResponseEntity<>(service.logIn(dto), HttpStatus.OK);
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refresh(@Valid @RequestBody RefreshTokenRequestDTO dto) {
+        return new ResponseEntity<>(service.refresh(dto), HttpStatus.OK);
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(@Valid @RequestBody RefreshTokenRequestDTO dto) {
+        service.logout(dto);
+        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
 
