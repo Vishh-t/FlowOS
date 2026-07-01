@@ -1,5 +1,7 @@
 package org.example.flowos.Auth.Services;
 
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import lombok.RequiredArgsConstructor;
 import org.example.flowos.Auth.Config.AuthProvider;
 import org.example.flowos.Auth.Dto.*;
@@ -23,6 +25,7 @@ public class AuthService
     private final PasswordEncoder encoder;
     private final JwtUtil jwtUtil;
     private final RefreshTokenService tokenService;
+    private final GoogleIdTokenVerifier googleIdTokenVerifier;
 
     public LoginAndSignUpResponseDTO signUp(SignUpDTO dto)
     {
@@ -47,7 +50,12 @@ public class AuthService
     public LoginAndSignUpResponseDTO logIn(LogInDTO dto)
     {
         User storedUser = repo.findByEmailId(dto.getEmailId());
-        if (storedUser == null || !encoder.matches(dto.getPassword(), storedUser.getHashedPassword()))
+
+        if ( storedUser == null ||storedUser.getHashedPassword() == null)
+        {
+            throw new InvalidCredentialsException("Invalid Email or Password");
+        }
+        if (!encoder.matches(dto.getPassword(), storedUser.getHashedPassword()))
         {
             throw new InvalidCredentialsException("Invalid Email or Password");
         }
@@ -69,7 +77,8 @@ public class AuthService
         return responseDTO;
     }
 
-    public RefreshResponseDTO refresh(RefreshTokenRequestDTO dto) {
+    public RefreshResponseDTO refresh(RefreshTokenRequestDTO dto)
+    {
         UUID userId = tokenService.getUserIdFromRefreshToken(dto.getRefreshToken());
         String accessToken = jwtUtil.generateAccessToken(userId);
 
@@ -78,7 +87,56 @@ public class AuthService
         return response;
     }
 
-    public void logout(RefreshTokenRequestDTO dto) {
+    public void logout(RefreshTokenRequestDTO dto)
+    {
         tokenService.revokeRefreshToken(dto.getRefreshToken());
+    }
+
+    public LoginAndSignUpResponseDTO signInWithGoogle(GoogleSignInDTO dto)
+    {
+        GoogleIdToken idToken;
+        try
+        {
+            idToken = googleIdTokenVerifier.verify(dto.getIdToken());
+        } catch (Exception e)
+        {
+            throw new InvalidCredentialsException("Google token verification failed");
+        }
+
+        if (idToken == null)
+        {
+            throw new InvalidCredentialsException("Invalid Google token");
+        }
+
+        GoogleIdToken.Payload payload = idToken.getPayload();
+        String googleId = payload.getSubject();
+        String email = payload.getEmail();
+        String name = (String) payload.get("name");
+
+        User user = repo.findByGoogleId(googleId);
+
+        if (user == null)
+        {
+            user = repo.findByEmailId(email);
+
+            if (user != null)
+            {
+                // existing LOCAL account, same email -> silent link
+                user.setGoogleId(googleId);
+                repo.save(user);
+            } else
+            {
+                // brand-new user
+                user = new User();
+                user.setEmailId(email);
+                user.setName(name != null ? name : email);
+                user.setGoogleId(googleId);
+                user.setAuthProvider(AuthProvider.GOOGLE);
+                user.setCreatedAt(Instant.now());
+                user = repo.save(user);
+            }
+        }
+
+        return buildResponseDto(user);
     }
 }

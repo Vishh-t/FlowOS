@@ -2,6 +2,7 @@ package org.example.flowos.Auth.Controller;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.example.flowos.Auth.Dto.GoogleSignInDTO;
 import org.example.flowos.Auth.Dto.LogInDTO;
 import org.example.flowos.Auth.Dto.RefreshTokenRequestDTO;
 import org.example.flowos.Auth.Dto.SignUpDTO;
@@ -41,6 +42,12 @@ public class AuthController
     public ResponseEntity<?> logout(@Valid @RequestBody RefreshTokenRequestDTO dto) {
         service.logout(dto);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+    }
+
+    @PostMapping("/google")
+    public ResponseEntity<?> signInWithGoogle(@Valid @RequestBody GoogleSignInDTO dto)
+    {
+        return new ResponseEntity<>(service.signInWithGoogle(dto), HttpStatus.OK);
     }
 
 
