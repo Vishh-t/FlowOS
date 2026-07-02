@@ -8,8 +8,8 @@ import org.example.flowos.Auth.Dto.*;
 import org.example.flowos.Auth.Config.JwtUtil;
 import org.example.flowos.Exceptions.AlreadyExistsException;
 import org.example.flowos.Exceptions.InvalidCredentialsException;
-import org.example.flowos.User.User;
-import org.example.flowos.User.UserRepo;
+import org.example.flowos.User.Entity.User;
+import org.example.flowos.User.Repo.UserRepo;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 

@@ -1,4 +1,4 @@
-package org.example.flowos.User;
+package org.example.flowos.User.Entity;
 
 import jakarta.annotation.Nullable;
 import jakarta.persistence.*;

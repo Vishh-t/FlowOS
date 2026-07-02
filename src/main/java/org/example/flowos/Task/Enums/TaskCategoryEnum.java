@@ -1,4 +1,4 @@
-package org.example.flowos.Task;
+package org.example.flowos.Task.Enums;
 
 public enum TaskCategoryEnum
 {

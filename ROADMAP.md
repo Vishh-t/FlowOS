@@ -31,8 +31,9 @@ vision doc and is not rewritten for every schema decision.
   refresh tokens), Spring Security filter chain, global exception handling.
 - `User` entity — supports both LOCAL and GOOGLE auth providers on one table.
 
-**In progress:** `Profile` entity, unified `Task` entity + `EventTime` embeddable (see §3 —
-this replaced the earlier separate `Commitment`/`Goal`/`SoftTimeBlock` design).
+**In progress:** `Task` entity + nested embeddables (`EventOccurrence` → `EventTime`,
+`TaskTimeRange` ×2, `Recurrence`) — see §3.3 for the actual current shape, which evolved
+significantly from the original flat sketch. `Profile` entity is done.
 
 **Not started yet:** Import, Scheduler Engine, Calendar, Notifications, Analytics, AI Parser.
 No React Native frontend exists yet — backend-only repo so far.
@@ -71,66 +72,146 @@ the reasoning isn't lost, not just the final answer.
   below). Profile only holds what defines the *boundary* of the user's day, not anything
   that happens *within* it.
 
-### 3.3 `Task` (replaces `Commitment` + `Goal` + `SoftTimeBlock`)
+### 3.3 `Task` (replaces `Commitment` + `Goal` + `SoftTimeBlock`) — AS ACTUALLY IMPLEMENTED
 One entity for anything that occupies time: college, exams, meals, naps, gym, DSA, leisure.
-Distinguished by `EventTime.scheduleType`, not by separate tables.
 
-Fields (draft — refine while implementing, not gospel):
-- `id`, `@ManyToOne User`
-- `title` (String)
-- `category` (enum or free-text — TBD while building; not load-bearing for the scheduler yet)
-- `priority` (enum or int — used for scoring/conflict resolution)
-- `splittable` (boolean — can a multi-hour duration be split into sessions?)
-- `deadline` (nullable `LocalDate`/`LocalDateTime`)
-- `travelTimeMinutes` (nullable int — replaces the old `Profile.commuteDurationMinutes`;
-  lives per-Task since travel time genuinely varies by location, not globally)
-- `bufferAfterMinutes` (nullable int — replaces the old `Profile.defaultBufferMinutes`;
-  lives per-Task since a 5-min break after gym isn't the same as after a desk task. Set
-  either explicitly by the user or parsed from natural language later via AI Parser, e.g.
-  "give me a 5 min break after gym.")
-- `eventTime` — `@Embedded EventTime`
+The original plan was a flat `Task` + single embedded `EventTime`. While implementing, this
+evolved into a small nested object graph — recorded here as the real, current shape, not the
+original sketch:
 
-### 3.4 `EventTime` (`@Embeddable`, not its own table — no independent identity/lifecycle)
-- `scheduleType` — enum: `FIXED` / `ANCHORED` / `FLEXIBLE`
-  - `FIXED` — immovable, exact start/end required (college, exams, meetings). Scheduler
-    never moves these; they're placed first and everything else works around them.
-  - `ANCHORED` — has a preferred time with some drift tolerance (lunch ~1pm ±30min, gym
-    "around 6pm"). Requires `preferredTime` + `flexibilityMinutes` filled.
-  - `FLEXIBLE` — no time preference, only duration + frequency (DSA "2hrs/day, whenever
-    fits"). `preferredTime`/`flexibilityMinutes` intentionally null — null here means
-    "flexible by design," not "data missing," because `scheduleType` makes that explicit.
-- `startTime` / `endTime` (for `FIXED`)
-- `preferredTime` / `flexibilityMinutes` (for `ANCHORED`)
-- `durationMinutes`
-- `daysOfWeek` (nullable set — null/empty = any day; otherwise restricts which days this
-  applies)
-- `recurrence` (daily / specific days / one-off — exact representation TBD while building)
+```
+Task
+ ├─ taskId, user, taskName, category (TaskCategoryEnum), splittable
+ ├─ movability (FlexibilityEnum: FLEXIBLE / ANCHORED / FIXED) — this IS the old
+ │   "scheduleType" concept, renamed during implementation
+ ├─ priority (TaskPriorityEnum)
+ └─ @Embedded EventOccurrence
+     ├─ @Embedded EventTime            (taskDurationInMinutes, duration tolerance — see below)
+     ├─ bufferTimeInMinutes            (replaces old Profile.defaultBufferMinutes; mental
+     │                                  transition gap, independent of location)
+     ├─ commuteTimeInMinutes           (replaces old Profile.commuteDurationMinutes; physical
+     │                                  travel time, independent of buffer — a task can need
+     │                                  either, both, or neither)
+     ├─ status (TaskStatusEnum: PENDING / IN_PROGRESS / DONE)
+     ├─ preferredTimeRange (@Embedded TaskTimeRange, nullable) — what the user asked for
+     ├─ allottedTimeRange (@Embedded TaskTimeRange)             — what the scheduler placed
+     ├─ taskDeadline (nullable LocalDateTime)
+     └─ @Embedded Recurrence           (see §3.6a)
+```
 
-**Why nullability is disambiguated by `scheduleType` and not left to mean one thing
-everywhere:** without the explicit enum, a null `preferredTime` could mean either "flexible
-on purpose" or "user hasn't set this yet," which is an unresolvable ambiguity once the UI
-needs to distinguish "incomplete setup" from "valid flexible task." The enum makes intent
-explicit.
+**Why `EventOccurrence` exists as a wrapper rather than flattening everything onto `Task`:**
+groups every timing-related concern (duration, buffer, commute, status, ranges, deadline,
+recurrence) into one cohesive embeddable, keeping `Task` itself focused on identity/
+classification (name, category, priority, movability). Deliberate choice, not accidental
+nesting — confirmed during implementation when there was a pull to put tolerance fields
+directly on `Task`; rejected because it would flatten a structured, purposeful grouping into
+an undifferentiated pile of fields on the root entity.
 
-**Known accepted trade-off:** a single `Task` table means some columns are only meaningful
-for some `scheduleType` values (e.g. `splittable`/`priority` matter less for `FIXED`
-entries; `startTime`/`endTime` don't apply to `FLEXIBLE` ones). This is a recognized pattern
-("table sprawl via nullable columns") — accepted here because it keeps the Scheduler's
-placement logic operating over one entity type instead of merging two, which is a bigger win
-for this project than the schema purity cost. Revisit only if it actually becomes painful in
-practice, not preemptively.
+**Tolerance — consolidated from 3 fields down to 1 distinct concept (design correction made
+during implementation):**
+Originally, tolerance appeared in three places: `EventTime.errorTolerance`,
+`TaskTimeRange.taskTolerance` (on `preferredTimeRange`), and `TaskTimeRange.taskTolerance`
+(on `allottedTimeRange`). Resolved as follows:
+- `TaskTimeRange.taskTolerance` — **removed entirely, from both usages.** A `TaskTimeRange`
+  already stores explicit `taskStartTime`/`taskEndTime` — that pair *is* the flexibility
+  window. A separate scalar tolerance on top of an explicit range duplicates information the
+  range already carries. (Tolerance-via-scalar is only needed when representing flexibility
+  as anchor-point + margin instead of an explicit range — not the representation chosen here.)
+- `EventTime.errorTolerance` — **kept, but must be renamed** (pending — not yet applied in
+  code as of this writing) to something like `durationToleranceMinutes`, since this field is
+  about a genuinely different axis: how much the task's *duration* can flex (e.g. nominally
+  40 min, ±5 min acceptable), independent of *when* it's scheduled. Timing flexibility lives
+  in the range; duration flexibility lives in this one field. Two distinct, non-overlapping
+  concepts, not duplication.
 
-### 3.5 What got removed from the earlier design
-- `Commitment` entity — merged into `Task` (`scheduleType = FIXED`).
-- `Goal` entity — merged into `Task` (`scheduleType = ANCHORED` or `FLEXIBLE`).
+**`preferredTimeRange` vs `allottedTimeRange`:** `preferredTimeRange` = what the user asked
+for (input, nullable — not every task has an explicit ask). `allottedTimeRange` = what the
+Scheduler actually placed (output/result). This distinction is why tolerance only makes
+sense on the preferred/input side — the allotted range is already a resolved decision, there's
+nothing left to be tolerant about once it's been placed.
+
+`deadline` lives as `taskDeadline` inside `EventOccurrence`, not on `Task` directly —
+consistent with grouping timing concerns together. `category` (`TaskCategoryEnum`, see
+§3.6) is purely descriptive/analytical — does **not** influence scheduling or scoring;
+`priority` is the only field that affects placement.
+
+### 3.6 `TaskCategory` (enum)
+
+Decision: **pre-defined enum, not user-extensible.** A fully user-extensible `Category`
+entity was considered and deliberately deferred — nothing consumes `category` yet (not the
+scheduler, not Analytics, which is Phase 3), so the extensible version would be scope pulled
+forward for a consumer that can't test it yet. Swappable for an FK-based version later
+without touching the Scheduler, since the Scheduler never reads this field.
+
+Orthogonal to `EventTime.scheduleType` — category answers "what domain of life," scheduleType
+answers "how rigid is the timing." E.g. college (FIXED) and DSA practice (FLEXIBLE) can both
+be `ACADEMICS`.
+
+```java
+enum TaskCategory {
+    ACADEMICS,        // college, classes, exams, assignments
+    SKILL_BUILDING,   // DSA, coding practice, personal projects, learning new tech
+    FITNESS,          // gym, sports, workouts
+    HEALTH,           // meals, sleep-adjacent, medical, self-care
+    SOCIAL,           // hangouts, calls, family time
+    LEISURE,          // Netflix, gaming, Instagram, YouTube
+    CHORES,           // errands, cleaning, admin/life-maintenance tasks
+    CAREER,           // placement prep, interviews, resume work, networking
+    PERSONAL_GROWTH   // hobbies (guitar, reading, journaling) — self-directed, not
+                       // "skill for a job," not pure leisure either
+}
+```
+
+Why some categories weren't merged: `ACADEMICS`/`SKILL_BUILDING`/`CAREER` look similar (all
+"studying") but differ in purpose — obligation vs. self-directed growth vs. deadline-driven
+placement prep; splitting lets Weekly Insights surface things a merged "Study" bucket
+couldn't. `FITNESS` vs `HEALTH` — active/repeatable habit vs. passive-but-blocking
+(meals/medical). `PERSONAL_GROWTH` vs `LEISURE` — self-improvement intent vs. intentionally
+sacrificial downtime; lowest-cost one to fold into `LEISURE` later if 9 ever feels like one
+too many.
+
+### 3.4 `EventTime` (`@Embeddable`, nested inside `EventOccurrence`) — AS IMPLEMENTED
+Holds only duration-related fields — timing/rigidity moved to `Task.movability`
+(`FlexibilityEnum`) and to `TaskTimeRange` (see §3.3), not here as originally sketched.
+
+- `taskDurationInMinutes` (int)
+- duration tolerance field — pending rename from `errorTolerance` to something explicit like
+  `durationToleranceMinutes` (see §3.3 tolerance discussion — not yet applied in code)
+
+### 3.4a `TaskTimeRange` (`@Embeddable`, used twice inside `EventOccurrence`)
+- `taskStartTime`, `taskEndTime` (`LocalTime`)
+- No separate tolerance field — the `[start, end]` pair already **is** the tolerance/
+  flexibility window; a scalar on top would duplicate it (see §3.3).
+
+### 3.4b `Recurrence` (`@Embeddable`, nested inside `EventOccurrence`) — AS IMPLEMENTED
+- `recurrenceTypeEnum` — `RecurrenceTypeEnum`: `ONE_OFF` / `DAILY` / `WEEKLY` / `MONTHLY` /
+  `ANNUALLY`
+- `weeklyMode` — `WeeklyModeEnum`: `EXACT_DAYS` / `COUNT_ONLY` (explicit discriminator, not
+  inferred from which field is null — same reasoning as `scheduleType`/`movability`: null
+  must not have to mean two different things)
+- `daysOfWeek` (`Set<DayOfWeek>`) — used when `weeklyMode = EXACT_DAYS`
+- `timesPerWeek` (`Integer`) — used when `weeklyMode = COUNT_ONLY`, scheduler picks the days
+- `dayOfMonth`, `monthOfYear` (`Integer`) — stubbed for `MONTHLY`/`ANNUALLY`; not fully
+  designed yet, deliberately deferred since almost nothing in the actual use case (gym, DSA,
+  meals, classes) needs them. `DAILY`/`WEEKLY`/`ONE_OFF` are the ones that matter for v1.
+
+### 3.5 What got removed / renamed from the earlier design
+- `Commitment` entity — merged into `Task` (`movability = FIXED`).
+- `Goal` entity — merged into `Task` (`movability = ANCHORED` or `FLEXIBLE`).
 - `SoftTimeBlock` / `RecurringSoftBlock` entity — merged into `Task` (meals/naps are just
   `ANCHORED` tasks with a title like "Lunch").
-- `Profile.commuteDurationMinutes` — moved to `Task.travelTimeMinutes` (per-instance, not
-  global — a 45-min commute to college and a 15-min commute to the gym can't share one
+- `EventTime.scheduleType` (original plan) → became `Task.movability` (`FlexibilityEnum`),
+  a field directly on `Task` rather than nested inside the embeddable. Values renamed
+  `FLEXIBLE`/`ANCHORED`/`FIXED` — same three-way split, same reasoning: explicit
+  discriminator so nullability of dependent fields is never ambiguous.
+- `Profile.commuteDurationMinutes` → `EventOccurrence.commuteTimeInMinutes` (per-instance,
+  not global — a 45-min commute to college and a 15-min commute to the gym can't share one
   number).
-- `Profile.defaultBufferMinutes` — moved to `Task.bufferAfterMinutes` (per-instance; also
-  deliberately not asked at onboarding — it's set per-task, naturally, rather than as an
-  abstract upfront question that would frustrate onboarding UX).
+- `Profile.defaultBufferMinutes` → `EventOccurrence.bufferTimeInMinutes` (per-instance;
+  deliberately not asked at onboarding — set per-task, naturally, rather than as an
+  abstract upfront question).
+- `EventTime.recurrence` (vague, original plan) → dedicated `Recurrence` embeddable (§3.4b),
+  designed once the weekly count-vs-exact-days fork was spotted.
 
 ---
 
@@ -140,13 +221,13 @@ practice, not preemptively.
 |---|---|---|
 | Auth ✅ | Identity, tokens | Anything about the user's schedule |
 | User/Profile | Wake/sleep window, morning/night pref | Anything time-instance-specific (moved to Task) |
-| **Task** (was Goals + Commitments) | All schedulable items — fixed, anchored, or flexible, via `EventTime` | Placement/timing decisions — it's data, not logic |
-| Import | Parsing PDFs/screenshots/Google Calendar → `Task` rows with `scheduleType = FIXED` | Any scheduling logic |
+| **Task** (was Goals + Commitments) | All schedulable items — fixed, anchored, or flexible, via `movability` + `EventOccurrence` | Placement/timing decisions — it's data, not logic |
+| Import | Parsing PDFs/screenshots/Google Calendar → `Task` rows with `movability = FIXED` | Any scheduling logic |
 | **Scheduler Engine** | Turns `Task` rows + `Profile` into a placed weekly schedule; owns rescheduling | Task data itself — it's a consumer |
 | Calendar | Read-facing projection of the scheduler's output | Does not generate placements |
 | Notifications | Reacting to scheduler events | No scheduling logic |
 | Analytics | Historical record of planned-vs-actual, derived insights | Does not feed back into scheduling decisions yet (deferred — see §6) |
-| AI Parser | NLU only: sentence → structured `Task`/`EventTime` fields | Never touches placement logic directly — calls the same APIs any client would |
+| AI Parser | NLU only: sentence → structured `Task`/`EventOccurrence` fields | Never touches placement logic directly — calls the same APIs any client would |
 
 **Standing rule (unchanged):** AI Parser is a client of FlowOS's own APIs, never a special
 backdoor into scheduling logic.
@@ -156,9 +237,11 @@ backdoor into scheduling logic.
 ## 5. Build Order (phased, not versioned — full scope intended, just sequenced)
 
 ### Phase 1 — Minimal data backbone (IN PROGRESS)
-1. `Profile` entity — being built now.
-2. `Task` + `EventTime` — being built now (replaces the earlier separate `Commitment`/`Goal`
-   plan from §3).
+1. `Profile` entity — done.
+2. `Task` + nested embeddables (`EventOccurrence`, `EventTime`, `TaskTimeRange`,
+   `Recurrence`) — in progress, see §3.3 for actual shape. Remaining cleanup: rename
+   `EventTime.errorTolerance` → `durationToleranceMinutes`; fix `Task.even` field name typo
+   (→ `eventOccurrence` or similar).
 3. `ProfileRepo`, `TaskRepo` — standard Spring Data repos, same pattern as `UserRepo`.
 
 No controller/service layer yet — no endpoint needs this until onboarding/task-creation flow
@@ -169,9 +252,9 @@ exists, and that's not blocking Phase 2. Just get entities + repos compiling and
    greedily place `ANCHORED`/`FLEXIBLE` tasks by priority into remaining free time. No
    scoring, no candidates yet — goal is a working end-to-end pipeline.
 2. **Constraint validation layer** — sleep protection (respect `Profile.wakeTime`/
-   `sleepTime`), no double-booking, respecting `ANCHORED` preferred time + flexibility
-   window, respecting `travelTimeMinutes` around `FIXED` tasks, respecting
-   `bufferAfterMinutes` between tasks.
+   `sleepTime`), no double-booking, respecting `ANCHORED` preferred time range +
+   `preferredTimeRange`, respecting `commuteTimeInMinutes` around `FIXED` tasks, respecting
+   `bufferTimeInMinutes` between tasks.
 3. **Multi-candidate + scoring** — generate several candidate schedules, score on: goal
    completion, sleep preservation, workload balance, context-switch minimization, preference
    alignment. Real algorithm-design discussion (greedy vs. backtracking vs. CSP vs. local
@@ -188,8 +271,8 @@ exists, and that's not blocking Phase 2. Just get entities + repos compiling and
 ### Phase 4 — AI Parser
 Deliberately last — least architecturally risky, translates into a stable target instead of
 a moving one. Natural-language buffer/preference requests ("give me a 5 min break after
-gym") get parsed here into the appropriate `Task.bufferAfterMinutes` /
-`EventTime.preferredTime` fields — never handled as special-cased scheduling logic.
+gym") get parsed here into the appropriate `EventOccurrence.bufferTimeInMinutes` /
+`preferredTimeRange` fields — never handled as special-cased scheduling logic.
 
 ---
 
@@ -260,8 +343,10 @@ enough — don't reach for it upfront.
 
 ## 9. Working Agreement (how Claude should behave across all chats on this project)
 
-- Backend = user's learning area. Explain, hint, point out mistakes. Never rewrite backend
-  code unless explicitly asked. Backend is read-only by default.
+- Backend = user's learning area. Explain, hint, point out mistakes. **Backend `.java` files
+  are never edited directly via filesystem tools — no exceptions, even if it seems faster.**
+  Only markdown docs (`ROADMAP.md`, `PROJECT_CONTEXT.md`) may be written directly. All
+  backend code changes are made by the user, after discussion.
 - Frontend = Claude can edit directly via filesystem tools when needed.
 - Scheduler Engine gets extra care: algorithm trade-offs, complexity discussion, multiple
   approaches — always before code.
@@ -282,17 +367,30 @@ enough — don't reach for it upfront.
 - [ ] One general re-optimize function vs. specialized fast-path handlers per reschedule
       trigger type? (Revisit at Phase 2.4)
 - [ ] Grace period behavior for "passive drift" (task not started, not explicitly skipped)?
-- [ ] `Task.category` — enum or free-text? Not load-bearing for scheduler yet, decide while
-      implementing.
-- [ ] `EventTime.recurrence` exact representation (daily/specific days/one-off) — decide
-      while implementing `Task`.
+- [ ] Rename `EventTime.errorTolerance` → `durationToleranceMinutes` — decided, not yet
+      applied in code.
+- [ ] Fix `Task.even` field name typo (leftover from initial wiring).
+- [ ] Add `TaskRepo` once `Task` entity is finalized.
+- [x] `Task.category` — enum or free-text? → **Resolved: pre-defined `TaskCategoryEnum`,
+      9 values, not user-extensible (see §3.6).**
+- [x] Recurrence exact representation → **Resolved: dedicated `Recurrence` embeddable with
+      `RecurrenceTypeEnum` + `WeeklyModeEnum` fork for weekly count-vs-exact-days (§3.4b).**
 - [x] Leisure as separate entity vs. own type? → **Resolved: just a `Task` with low priority,
       no special entity.**
 - [x] Meals/naps as separate `SoftTimeBlock` entity? → **Resolved: removed, unified into
-      `Task` with `scheduleType = ANCHORED`.**
+      `Task` with `movability = ANCHORED`.**
 - [x] Commute duration — global `Profile` field or per-instance? → **Resolved: per-instance,
-      moved to `Task.travelTimeMinutes`.**
+      `EventOccurrence.commuteTimeInMinutes`.**
 - [x] Buffer between tasks — global `Profile` default or per-task? → **Resolved: per-task,
-      `Task.bufferAfterMinutes`, set explicitly or via NLP, never asked at onboarding.**
+      `EventOccurrence.bufferTimeInMinutes`, set explicitly or via NLP, never asked at
+      onboarding.**
 - [x] `Commitment`/`Goal` as separate entities? → **Resolved: unified into single `Task`
-      entity with `EventTime` embeddable distinguishing rigidity via `scheduleType`.**
+      entity; rigidity now lives in `Task.movability` (`FlexibilityEnum`), not nested in
+      `EventTime` as first sketched.**
+- [x] Tolerance appearing in 3 places (`EventTime.errorTolerance`,
+      `TaskTimeRange.taskTolerance` ×2) → **Resolved: `TaskTimeRange.taskTolerance` removed
+      entirely (the start/end range already is the tolerance window); only
+      `EventTime`'s duration-tolerance field survives, pending rename (see above).**
+- [x] Tolerance fields on `Task` itself vs. nested? → **Resolved: stays nested inside
+      `EventOccurrence`/`EventTime` — flattening onto `Task` would lose the structured
+      grouping and reintroduce ambiguity.**

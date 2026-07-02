@@ -1,5 +1,6 @@
-package org.example.flowos.User;
+package org.example.flowos.User.Repo;
 
+import org.example.flowos.User.Entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.UUID;
