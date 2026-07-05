@@ -307,6 +307,48 @@ mechanics are fine; they shouldn't be the primary hook.
 
 ---
 
+## 6a. AI Parser vs. Scheduler — Where the Line Actually Sits (clarified through discussion)
+
+This boundary came up repeatedly from different angles (priority assignment, time-of-day
+phrases) — consolidated here as one clear reference instead of scattered across chat history.
+
+**The single governing rule:** AI Parser turns fuzzy human language into structured `Task`/
+`EventOccurrence` field values. It never decides placement, timing, or conflict resolution —
+that's 100% the Scheduler's job, always, no exceptions. The test for "is this AI's job": does
+this fill in a data field from words, or does this decide where/when something actually
+happens / who wins a conflict? The former is fine for AI; the latter never is.
+
+**Concrete cases resolved under this rule:**
+
+- **Priority:** AI may infer `priority` from phrasing ("I really need to nail DSA" → higher
+  priority) — this is extraction, identical in kind to inferring `category` from "gym." It is
+  NOT the AI deciding which task wins a scheduling conflict; that's still entirely the
+  Scheduler's job, using whatever priority value it's handed. Layered fallback so the user
+  is never forced to set this themselves:
+  1. **Default from `category`** — a simple static lookup (e.g. `ACADEMICS`/`CAREER` skew
+     higher, `LEISURE` skews lower). Zero user effort, zero AI needed, covers most cases.
+  2. **AI refines it from phrasing**, when parsing natural language, if wording carries a
+     clear signal. Optional enhancement, not a requirement.
+  3. **User can always override explicitly** — opt-in, never forced.
+  Fixed/hardcoded default table for now (not per-user tunable) — same reasoning as deferring
+  `Category`-as-entity and ML: don't add configurability before there's evidence a fixed
+  default is wrong often enough to justify it.
+
+- **Fuzzy time-of-day phrases ("gym in the evening"):** AI may convert this into a rough
+  candidate window (e.g. `preferredTimeRange = 4pm–8pm`) — this is the same extraction move
+  as converting "five days a week" into `Recurrence`. AI does **not** pick the exact slot
+  within that window — the Scheduler looks at what's actually free inside 4–8pm, checks
+  buffer/commute/competing tasks, and decides the real placement (e.g. 5:30–6:30). If nothing
+  in that window is free, deciding what happens next (widen search, flag unplaceable, etc.)
+  is also the Scheduler's call, never the AI's.
+
+**Why this matters enough to write down:** it would be easy, while building the AI Parser in
+Phase 4, to let it creep into "helpfully" resolving something that looks like simple
+classification but is actually a scheduling call in disguise. The test above ("field-filling
+vs. deciding placement/conflicts") is the check to run whenever that temptation shows up.
+
+---
+
 ## 7. Rescheduling Trigger Taxonomy (for Phase 2.4)
 
 - **Time-shift events:** overslept, running late, finished early.
