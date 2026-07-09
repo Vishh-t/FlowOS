@@ -29,4 +29,7 @@ public class Recurrence
 
 
     private Integer monthOfYear;
+
+    private Set<DayOfWeek> excludedDaysOfWeek;
+
 }

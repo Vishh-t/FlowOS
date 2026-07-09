@@ -6,6 +6,7 @@ import jakarta.persistence.Embedded;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.TaskStatusEnum;
 
 import java.time.LocalDateTime;
@@ -23,6 +24,8 @@ public class EventOccurrence
     private int bufferTimeInMinutes;
 
     private int commuteTimeInMinutes;
+
+    private CommuteApplicationEnum commuteApplicableWay;
 
     private TaskStatusEnum status;
 

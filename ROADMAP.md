@@ -184,6 +184,19 @@ Holds only duration-related fields — timing/rigidity moved to `Task.movability
   flexibility window; a scalar on top would duplicate it (see §3.3).
 
 ### 3.4b `Recurrence` (`@Embeddable`, nested inside `EventOccurrence`) — AS IMPLEMENTED
+
+**Clarified relationship between `movability` and `preferredTimeRange` (resolved through
+discussion):** these are two independent axes, not one implying the other.
+- `preferredTimeRange` — a *wide window* the Scheduler should try hard to place the task
+  within (not one exact instant). Nearly any task can carry one, regardless of `movability`.
+- `movability` (`FlexibilityEnum`) — purely about **resistance to being moved during
+  rescheduling**, not initial-placement flexibility: `FLEXIBLE` gives way first when
+  something needs to shift, `ANCHORED` gives way only once `FLEXIBLE` options are exhausted,
+  `FIXED` never moves, full stop. A `FLEXIBLE` task can absolutely have a `preferredTimeRange`
+  — it's just a soft suggestion, first to be overridden when rescheduling needs room. An
+  `ANCHORED` task's `preferredTimeRange` is a much stronger signal, respected until there's
+  genuinely no other option.
+
 - `recurrenceTypeEnum` — `RecurrenceTypeEnum`: `ONE_OFF` / `DAILY` / `WEEKLY` / `MONTHLY` /
   `ANNUALLY`
 - `weeklyMode` — `WeeklyModeEnum`: `EXACT_DAYS` / `COUNT_ONLY` (explicit discriminator, not
@@ -194,6 +207,15 @@ Holds only duration-related fields — timing/rigidity moved to `Task.movability
 - `dayOfMonth`, `monthOfYear` (`Integer`) — stubbed for `MONTHLY`/`ANNUALLY`; not fully
   designed yet, deliberately deferred since almost nothing in the actual use case (gym, DSA,
   meals, classes) needs them. `DAILY`/`WEEKLY`/`ONE_OFF` are the ones that matter for v1.
+- `excludedDaysOfWeek` (`Set<DayOfWeek>`, nullable/empty = no exclusions) — **new field,
+  added to solve a real gap:** a hard, categorical "never place this on these days" rule
+  (e.g. "gym is closed on Sunday"). Distinct in kind from `daysOfWeek` (an inclusion
+  whitelist, only meaningful in `EXACT_DAYS` mode) — this is a blacklist that applies
+  regardless of `WeeklyMode`. Matters most for `COUNT_ONLY` mode (Scheduler is free to pick
+  any day for "5x/week" and must skip excluded days) and for `DAILY` recurrence ("daily
+  except Sunday" is a normal real case). Redundant-but-harmless under `EXACT_DAYS` (user
+  already only listed allowed days). No-op under `ONE_OFF`. Candidate-generation logic in
+  the Scheduler must filter these days out before checking `WeeklyTimeline.isFree`.
 
 ### 3.5 What got removed / renamed from the earlier design
 - `Commitment` entity — merged into `Task` (`movability = FIXED`).
