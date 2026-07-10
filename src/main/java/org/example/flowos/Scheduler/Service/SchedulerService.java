@@ -9,11 +9,14 @@ import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
 
 import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.Set;
 
-import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.shift;
+import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.*;
 
 public class SchedulerService
 {
@@ -62,8 +65,7 @@ public class SchedulerService
             baseLatest = dto.getUserProfile().getSleepTime();
         }
 
-        // If the window's end time is earlier-in-the-clock than its start time
-        // (e.g. wake 9am, sleep 2am), the end boundary actually belongs to the next day.
+
         boolean latestCrossesMidnight = baseLatest.isBefore(baseStart);
 
         ShiftedTime shiftedStart = shift(baseStart, prePaddingMinutes);
@@ -86,30 +88,66 @@ public class SchedulerService
                                                                 int bufferTimeInMinutes, int durationToleranceMinutes, int commuteTimeInMinutes,
                                                                 boolean isBeforeTask, boolean isAfterTask, boolean isBothWay)
     {
+        LocalDateTime deadline = dto.getTask().getEvent().getTaskDeadline();
+        LocalDateTime now = dto.getNow();
+
         for (var day : DayOfWeek.values())
         {
 
             boolean dayExcluded = excludedDaysOfWeek.contains(day);
 
-            boolean notInExactDays = dto.getTask().getEvent().getTaskRecurrence().getWeeklyMode().equals(WeeklyModeEnum.EXACT_DAYS) && !taskRecurrence.getDaysOfWeek().contains(day);
+            boolean notInExactDays = taskRecurrence.getWeeklyMode().equals(WeeklyModeEnum.EXACT_DAYS) && !taskRecurrence.getDaysOfWeek().contains(day);
 
             if (dayExcluded || notInExactDays)
             {
                 continue;
             }
 
-            DayOfWeek cursorDay = day.plus(startDayOffset);
-            LocalTime cursor = taskStartTime;
-            DayOfWeek latestDay = day.plus(latestDayOffset);
 
-            // still missing the deadline check
-            while (TimeAndDayRange.comparePoints(cursorDay, cursor, latestDay, latestStartTime) <= 0)
+            int effectiveLatestDayOffset = latestDayOffset;
+            LocalTime effectiveLatestStartTime = latestStartTime;
+
+            if (deadline != null && now != null)
             {
-                DayOfWeek actualStartDay = cursorDay;
+                int daysUntilAnchor = daysUntilNextOccurrence(now.getDayOfWeek(), day);
+                LocalDate anchorDate = now.toLocalDate().plusDays(daysUntilAnchor);
+
+                int deadlineDayOffset = (int) ChronoUnit.DAYS.between(anchorDate, deadline.toLocalDate());
+                LocalTime deadlineTime = deadline.toLocalTime();
+
+                if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(startDayOffset, taskStartTime))
+                {
+
+                    continue;
+                }
+
+                if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(latestDayOffset, latestStartTime))
+                {
+                    effectiveLatestDayOffset = deadlineDayOffset;
+                    effectiveLatestStartTime = deadlineTime;
+                }
+            }
+
+
+            int maxSearchDayOffset = startDayOffset + 6;
+            LocalTime endOfMaxDay = LocalTime.of(23, 59);
+            if (toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime) > toRawMinutes(maxSearchDayOffset, endOfMaxDay))
+            {
+                effectiveLatestDayOffset = maxSearchDayOffset;
+                effectiveLatestStartTime = endOfMaxDay;
+            }
+
+
+            int cursorDayOffset = startDayOffset;
+            LocalTime cursor = taskStartTime;
+
+            while (toRawMinutes(cursorDayOffset, cursor) <= toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime))
+            {
+                int actualStartDayOffset = cursorDayOffset;
                 LocalTime actualCandidateStart = cursor;
 
                 ShiftedTime endShift = shift(cursor, taskDurationInMinutes);
-                DayOfWeek actualEndDay = cursorDay.plus(endShift.dayOffset());
+                int actualEndDayOffset = cursorDayOffset + endShift.dayOffset();
                 LocalTime actualCandidateEnd = endShift.time();
 
                 int postPaddingMinutes = bufferTimeInMinutes + durationToleranceMinutes;
@@ -119,18 +157,23 @@ public class SchedulerService
                 }
 
                 ShiftedTime paddedEndShift = shift(actualCandidateEnd, postPaddingMinutes);
-                DayOfWeek paddedEndDay = actualEndDay.plus(paddedEndShift.dayOffset());
+                int paddedEndDayOffset = actualEndDayOffset + paddedEndShift.dayOffset();
                 LocalTime paddedCandidateEnd = paddedEndShift.time();
 
-                DayOfWeek paddedStartDay = actualStartDay;
+                int paddedStartDayOffset = actualStartDayOffset;
                 LocalTime paddedCandidateStart = actualCandidateStart;
 
                 if (isBeforeTask || isBothWay)
                 {
                     ShiftedTime paddedStartShift = shift(actualCandidateStart, -commuteTimeInMinutes);
-                    paddedStartDay = actualStartDay.plus(paddedStartShift.dayOffset());
+                    paddedStartDayOffset = actualStartDayOffset + paddedStartShift.dayOffset();
                     paddedCandidateStart = paddedStartShift.time();
                 }
+
+                DayOfWeek actualStartDay = day.plus(actualStartDayOffset);
+                DayOfWeek actualEndDay = day.plus(actualEndDayOffset);
+                DayOfWeek paddedStartDay = day.plus(paddedStartDayOffset);
+                DayOfWeek paddedEndDay = day.plus(paddedEndDayOffset);
 
                 TimeAndDayRange actualCandidate = new TimeAndDayRange(actualStartDay, actualCandidateStart, actualEndDay, actualCandidateEnd);
 
@@ -142,7 +185,7 @@ public class SchedulerService
                 }
 
                 ShiftedTime next = shift(cursor, incrementalStep);
-                cursorDay = cursorDay.plus(next.dayOffset());
+                cursorDayOffset += next.dayOffset();
                 cursor = next.time();
             }
 
@@ -150,6 +193,7 @@ public class SchedulerService
 
         return Optional.empty();
     }
+
 
 
 }

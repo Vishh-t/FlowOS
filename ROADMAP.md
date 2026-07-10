@@ -4,7 +4,7 @@
 > should read this file before making architectural suggestions. Update it as decisions
 > are made — don't let decisions live only inside a chat transcript.
 
-Last updated: 2026-07-01
+Last updated: 2026-07-10
 
 ---
 
@@ -35,7 +35,37 @@ vision doc and is not rewritten for every schema decision.
 `TaskTimeRange` ×2, `Recurrence`) — see §3.3 for the actual current shape, which evolved
 significantly from the original flat sketch. `Profile` entity is done.
 
-**Not started yet:** Import, Scheduler Engine, Calendar, Notifications, Analytics, AI Parser.
+**Scheduler Engine — partially started (candidate-generation slice only, see §5 Phase 2
+note below):** `SchedulerService.generateCandidate` exists and handles: midnight-crossing
+wake/sleep windows and padding (a real bug found and fixed via a night-owl profile —
+`shift()` helper tracks day-rollover explicitly instead of relying on bare `LocalTime`
+wrap), the same wraparound bug one level up at the week boundary (Sunday→Monday, fixed by
+tracking day position as a raw non-wrapping offset until the final `TimeAndDayRange` is
+built), and `taskDeadline` as an upper bound on the search (recomputed per candidate day
+since a deadline's distance from each day differs; days where the deadline's occurrence has
+already passed are skipped outright). Verified via a standalone compiled dry run against the
+real algorithm code (not just read-through) covering these cases.
+
+**Known gaps in this slice, not yet addressed:**
+- Nothing yet constructs a `GenerateCandidateDTO` and populates `.now` — the deadline logic
+  is correct but inert until some caller/orchestrator exists to invoke `generateCandidate`
+  at all.
+- No lower bound preventing a candidate from being placed before `now` — only the deadline
+  (upper bound) is enforced.
+- `WeeklyTimeline` is architecturally a single recurring week (no "which week" concept) —
+  a deadline pushing the search past 7 days out is now clamped to avoid silently aliasing
+  onto the wrong day, but multi-week scheduling isn't actually representable yet. Real
+  limitation, not a bug — needs a deliberate decision before it matters (e.g. an assignment
+  due in 3 weeks).
+- `Recurrence.dayOfMonth`/`monthOfYear`/`timesPerWeek` are still unread by
+  `generateCandidate` — `MONTHLY`/`ANNUALLY`/`COUNT_ONLY` recurrence isn't implemented, as
+  originally scoped for later.
+- Where this work actually sits against the Phase 2.1/2.2 split below is an open question —
+  see §10.
+
+**Not started yet:** Import, Calendar, Notifications, Analytics, AI Parser, and the rest of
+the Scheduler Engine (naive full-placement pipeline, constraint validation layer beyond what
+`generateCandidate` already does, multi-candidate scoring, rescheduling).
 No React Native frontend exists yet — backend-only repo so far.
 
 **Known minor issues flagged, not yet fixed (backend is user's learning area — not fixed by Claude):**
@@ -428,12 +458,20 @@ enough — don't reach for it upfront.
 
 ## 10. Open Decisions Log
 
+- [ ] `generateCandidate`'s current scope (buffer/commute/preferred-range/deadline handling,
+      midnight- and week-boundary correctness) already does what §5 Phase 2 describes as
+      step 2, "Constraint validation layer" — while step 1, "Naive placement," was meant to
+      come first with no such validation. Does the Phase 2.1/2.2 boundary need redrawing to
+      match how the code actually evolved, or should a genuinely-naive placement pass still
+      be built first/separately, with `generateCandidate` folded in afterward as the 2.2
+      layer? Revisit before writing whatever calls `generateCandidate` for the first time.
 - [ ] One general re-optimize function vs. specialized fast-path handlers per reschedule
       trigger type? (Revisit at Phase 2.4)
 - [ ] Grace period behavior for "passive drift" (task not started, not explicitly skipped)?
-- [ ] Rename `EventTime.errorTolerance` → `durationToleranceMinutes` — decided, not yet
-      applied in code.
-- [ ] Fix `Task.even` field name typo (leftover from initial wiring).
+- [x] Rename `EventTime.errorTolerance` → `durationToleranceMinutes` — **done, verified in
+      code** (this log just hadn't been checked off).
+- [x] Fix `Task.even` field name typo (leftover from initial wiring) — **done, verified in
+      code** (`Task.event`, correctly named; this log just hadn't been checked off).
 - [ ] Add `TaskRepo` once `Task` entity is finalized.
 - [x] `Task.category` — enum or free-text? → **Resolved: pre-defined `TaskCategoryEnum`,
       9 values, not user-extensible (see §3.6).**

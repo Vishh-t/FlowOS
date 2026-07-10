@@ -8,6 +8,7 @@ import org.example.flowos.Task.Embedables.TaskTimeRange;
 import org.example.flowos.Task.Entity.Task;
 
 import java.time.DayOfWeek;
+import java.time.LocalDateTime;
 import java.util.Set;
 
 @Data
@@ -19,4 +20,6 @@ public class GenerateCandidateDTO
     Profile userProfile;
 
     WeeklyTimeline timeline;
+
+    LocalDateTime now;
 }
