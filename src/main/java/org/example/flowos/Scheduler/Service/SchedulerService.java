@@ -1,5 +1,6 @@
 package org.example.flowos.Scheduler.Service;
 
+import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
 import org.example.flowos.Scheduler.Service.DTOs.CandidateResult;
 import org.example.flowos.Scheduler.Service.DTOs.GenerateCandidateDTO;
@@ -12,7 +13,7 @@ import java.time.LocalTime;
 import java.util.Optional;
 import java.util.Set;
 
-import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.*;
+import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.shift;
 
 public class SchedulerService
 {
@@ -47,24 +48,43 @@ public class SchedulerService
 
         Recurrence taskRecurrence = dto.getTask().getEvent().getTaskRecurrence();
         Set<DayOfWeek> excludedDaysOfWeek = taskRecurrence.getExcludedDaysOfWeek();
-        LocalTime startTime;
-        LocalTime latestStartTime;
+
+        LocalTime baseStart;
+        LocalTime baseLatest;
 
         if (dto.getTask().getEvent().getPreferredTimeRange() != null)
         {
-            startTime = dto.getTask().getEvent().getPreferredTimeRange().getTaskStartTime().plusMinutes(prePaddingMinutes);
-            latestStartTime = dto.getTask().getEvent().getPreferredTimeRange().getTaskEndTime()
-                    .minusMinutes(taskDurationInMinutes + postPaddingMinutes);
+            baseStart = dto.getTask().getEvent().getPreferredTimeRange().getTaskStartTime();
+            baseLatest = dto.getTask().getEvent().getPreferredTimeRange().getTaskEndTime();
         } else
         {
-            startTime = dto.getUserProfile().getWakeTime().plusMinutes(prePaddingMinutes);
-            latestStartTime = dto.getUserProfile().getSleepTime()
-                    .minusMinutes(taskDurationInMinutes + postPaddingMinutes);
+            baseStart = dto.getUserProfile().getWakeTime();
+            baseLatest = dto.getUserProfile().getSleepTime();
         }
-        return getCandidateResult(dto, excludedDaysOfWeek, taskRecurrence, startTime, latestStartTime, taskDurationInMinutes, incrementalStep, isBeforeTask, isAfterTask, isBothWay);
+
+        // If the window's end time is earlier-in-the-clock than its start time
+        // (e.g. wake 9am, sleep 2am), the end boundary actually belongs to the next day.
+        boolean latestCrossesMidnight = baseLatest.isBefore(baseStart);
+
+        ShiftedTime shiftedStart = shift(baseStart, prePaddingMinutes);
+        int startDayOffset = shiftedStart.dayOffset();
+        LocalTime startTime = shiftedStart.time();
+
+        ShiftedTime shiftedLatest = shift(baseLatest, -(taskDurationInMinutes + postPaddingMinutes));
+        int latestDayOffset = (latestCrossesMidnight ? 1 : 0) + shiftedLatest.dayOffset();
+        LocalTime latestStartTime = shiftedLatest.time();
+
+        return getCandidateResult(dto, excludedDaysOfWeek, taskRecurrence, startTime, latestStartTime,
+                startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep,
+                bufferTimeInMinutes, durationToleranceMinutes, commuteTimeInMinutes,
+                isBeforeTask, isAfterTask, isBothWay);
     }
 
-    private static Optional<CandidateResult> getCandidateResult(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek, Recurrence taskRecurrence, LocalTime taskStartTime, LocalTime latestStartTime, int taskDurationInMinutes, int incrementalStep, boolean isBeforeTask, boolean isAfterTask, boolean isBothWay)
+    private static Optional<CandidateResult> getCandidateResult(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek,
+                                                                Recurrence taskRecurrence, LocalTime taskStartTime, LocalTime latestStartTime,
+                                                                int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep,
+                                                                int bufferTimeInMinutes, int durationToleranceMinutes, int commuteTimeInMinutes,
+                                                                boolean isBeforeTask, boolean isAfterTask, boolean isBothWay)
     {
         for (var day : DayOfWeek.values())
         {
@@ -78,52 +98,52 @@ public class SchedulerService
                 continue;
             }
 
+            DayOfWeek cursorDay = day.plus(startDayOffset);
             LocalTime cursor = taskStartTime;
+            DayOfWeek latestDay = day.plus(latestDayOffset);
 
-            // here we are still missing the deadline check and the midnight thing
-            while (!cursor.isAfter(latestStartTime))
+            // still missing the deadline check
+            while (TimeAndDayRange.comparePoints(cursorDay, cursor, latestDay, latestStartTime) <= 0)
             {
+                DayOfWeek actualStartDay = cursorDay;
                 LocalTime actualCandidateStart = cursor;
 
-                LocalTime actualCandidateEnd = cursor.plusMinutes(taskDurationInMinutes);
+                ShiftedTime endShift = shift(cursor, taskDurationInMinutes);
+                DayOfWeek actualEndDay = cursorDay.plus(endShift.dayOffset());
+                LocalTime actualCandidateEnd = endShift.time();
 
-                LocalTime paddedCandidateEnd;
-
-                LocalTime paddedCandidateStart = actualCandidateStart;
-
-                paddedCandidateEnd = addBufferTime(dto, actualCandidateEnd);
-
-                int durationToleranceMinutes = dto.getTask().getEvent().getTime().getDurationToleranceMinutes();
-
-                paddedCandidateEnd = addTolerance(paddedCandidateEnd, durationToleranceMinutes);
-
-                if (isBeforeTask)
+                int postPaddingMinutes = bufferTimeInMinutes + durationToleranceMinutes;
+                if (isAfterTask || isBothWay)
                 {
-                    paddedCandidateStart = subtractCommuteTime(dto, actualCandidateStart);
-
-                } else if (isAfterTask)
-                {
-                    paddedCandidateEnd = addCommuteTime(dto, paddedCandidateEnd);
-
-
-                } else if (isBothWay)
-                {
-                    paddedCandidateStart = subtractCommuteTime(dto, actualCandidateStart);
-
-                    paddedCandidateEnd = addCommuteTime(dto, paddedCandidateEnd);
-
+                    postPaddingMinutes += commuteTimeInMinutes;
                 }
 
-                TimeAndDayRange actualCandidate = new TimeAndDayRange(day, actualCandidateStart, day, actualCandidateEnd);
+                ShiftedTime paddedEndShift = shift(actualCandidateEnd, postPaddingMinutes);
+                DayOfWeek paddedEndDay = actualEndDay.plus(paddedEndShift.dayOffset());
+                LocalTime paddedCandidateEnd = paddedEndShift.time();
 
-                TimeAndDayRange paddedCandidate = new TimeAndDayRange(day, paddedCandidateStart, day, paddedCandidateEnd);
+                DayOfWeek paddedStartDay = actualStartDay;
+                LocalTime paddedCandidateStart = actualCandidateStart;
+
+                if (isBeforeTask || isBothWay)
+                {
+                    ShiftedTime paddedStartShift = shift(actualCandidateStart, -commuteTimeInMinutes);
+                    paddedStartDay = actualStartDay.plus(paddedStartShift.dayOffset());
+                    paddedCandidateStart = paddedStartShift.time();
+                }
+
+                TimeAndDayRange actualCandidate = new TimeAndDayRange(actualStartDay, actualCandidateStart, actualEndDay, actualCandidateEnd);
+
+                TimeAndDayRange paddedCandidate = new TimeAndDayRange(paddedStartDay, paddedCandidateStart, paddedEndDay, paddedCandidateEnd);
 
                 if (dto.getTimeline().isFree(paddedCandidate))
                 {
                     return Optional.of(new CandidateResult(actualCandidate, paddedCandidate));
                 }
 
-                cursor = cursor.plusMinutes(incrementalStep);
+                ShiftedTime next = shift(cursor, incrementalStep);
+                cursorDay = cursorDay.plus(next.dayOffset());
+                cursor = next.time();
             }
 
         }
