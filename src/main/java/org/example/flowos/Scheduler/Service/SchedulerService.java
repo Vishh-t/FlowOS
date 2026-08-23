@@ -1,10 +1,13 @@
 package org.example.flowos.Scheduler.Service;
 
+import org.example.flowos.Scheduler.DTOs.PlaceTaskDTO;
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
+import org.example.flowos.Scheduler.Helpers.RecurrenceInterpreters;
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
 import org.example.flowos.Scheduler.DTOs.CandidateResult;
 import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
 import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;
+import org.example.flowos.Scheduler.Record.PlacementResult;
 import org.example.flowos.Task.Embedables.Recurrence;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
@@ -14,6 +17,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -212,6 +217,38 @@ public class SchedulerService
         return Optional.empty();
 
 
+    }
+
+    private final RecurrenceInterpreters recurrenceInterpreters = new RecurrenceInterpreters();
+
+    public PlacementResult placeTask(PlaceTaskDTO placementDto)
+    {
+        List<DayOfWeek> targetDays = recurrenceInterpreters.resolveTargetDays(
+                placementDto.getTask().getEvent().getTaskRecurrence(), placementDto.getNow());
+
+        List<TimeAndDayRange> placedSlots = new ArrayList<>();
+        List<DayOfWeek> failedDays = new ArrayList<>();
+
+        for (DayOfWeek day : targetDays)
+        {
+            GenerateCandidateDTO dto = new GenerateCandidateDTO(
+                    placementDto.getTask(), placementDto.getProfile(),
+                    placementDto.getTimeline(), placementDto.getNow(), day);
+
+            Optional<CandidateResult> result = generateCandidate(dto);
+
+            if (result.isPresent())
+            {
+                placementDto.getTimeline().occupy(result.get().paddedRange());
+                placedSlots.add(result.get().actualRange());
+            }
+            else
+            {
+                failedDays.add(day);
+            }
+        }
+
+        return new PlacementResult(targetDays.size(), placedSlots.size(), placedSlots, failedDays);
     }
 
 
