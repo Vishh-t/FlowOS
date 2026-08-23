@@ -1,4 +1,4 @@
-package org.example.flowos.Profile;
+package org.example.flowos.Profile.Enums;
 
 public enum DayOrNightPersonEnum
 {

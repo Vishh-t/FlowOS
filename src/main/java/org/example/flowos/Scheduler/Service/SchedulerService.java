@@ -2,8 +2,9 @@ package org.example.flowos.Scheduler.Service;
 
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
-import org.example.flowos.Scheduler.Service.DTOs.CandidateResult;
-import org.example.flowos.Scheduler.Service.DTOs.GenerateCandidateDTO;
+import org.example.flowos.Scheduler.DTOs.CandidateResult;
+import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
+import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;
 import org.example.flowos.Task.Embedables.Recurrence;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
@@ -76,126 +77,142 @@ public class SchedulerService
         int latestDayOffset = (latestCrossesMidnight ? 1 : 0) + shiftedLatest.dayOffset();
         LocalTime latestStartTime = shiftedLatest.time();
 
-        return getCandidateResult(dto, excludedDaysOfWeek, taskRecurrence, startTime, latestStartTime,
-                startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep,
-                bufferTimeInMinutes, durationToleranceMinutes, commuteTimeInMinutes,
-                isBeforeTask, isAfterTask, isBothWay);
+        GetCandidateResultDTO resultDto = generateGetCandidateResultDTO(dto, excludedDaysOfWeek, taskRecurrence, isBothWay, isAfterTask, isBeforeTask, startTime, latestStartTime, bufferTimeInMinutes, startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep, durationToleranceMinutes, commuteTimeInMinutes);
+
+        return getCandidateResult(resultDto
+        );
     }
 
-    private static Optional<CandidateResult> getCandidateResult(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek,
-                                                                Recurrence taskRecurrence, LocalTime taskStartTime, LocalTime latestStartTime,
-                                                                int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep,
-                                                                int bufferTimeInMinutes, int durationToleranceMinutes, int commuteTimeInMinutes,
-                                                                boolean isBeforeTask, boolean isAfterTask, boolean isBothWay)
+    private static GetCandidateResultDTO generateGetCandidateResultDTO(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek, Recurrence taskRecurrence, boolean isBothWay, boolean isAfterTask, boolean isBeforeTask, LocalTime startTime, LocalTime latestStartTime, int bufferTimeInMinutes, int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep, int durationToleranceMinutes, int commuteTimeInMinutes)
     {
-        LocalDateTime deadline = dto.getTask().getEvent().getTaskDeadline();
-        LocalDateTime now = dto.getNow();
+        GetCandidateResultDTO resultDto = new GetCandidateResultDTO();
 
-        for (var day : DayOfWeek.values())
+        resultDto.setDto(dto);
+        resultDto.setExcludedDaysOfWeek(excludedDaysOfWeek);
+        resultDto.setTaskRecurrence(taskRecurrence);
+        resultDto.setBothWay(isBothWay);
+        resultDto.setAfterTask(isAfterTask);
+        resultDto.setBeforeTask(isBeforeTask);
+        resultDto.setTaskStartTime(startTime);
+        resultDto.setLatestStartTime(latestStartTime);
+        resultDto.setBufferTimeInMinutes(bufferTimeInMinutes);
+        resultDto.setStartDayOffset(startDayOffset);
+        resultDto.setLatestDayOffset(latestDayOffset);
+        resultDto.setTaskDurationInMinutes(taskDurationInMinutes);
+        resultDto.setIncrementalStep(incrementalStep);
+        resultDto.setDurationToleranceMinutes(durationToleranceMinutes);
+        resultDto.setCommuteTimeInMinutes(commuteTimeInMinutes);
+        return resultDto;
+    }
+
+
+    private static Optional<CandidateResult> getCandidateResult(GetCandidateResultDTO resultDto)
+    {
+        LocalDateTime deadline = resultDto.getDto().getTask().getEvent().getTaskDeadline();
+        LocalDateTime now = resultDto.getDto().getNow();
+
+        DayOfWeek day = resultDto.getDto().getTargetDay();
+
+        boolean dayExcluded = resultDto.getExcludedDaysOfWeek().contains(day);
+
+        boolean notInExactDays = resultDto.getTaskRecurrence().getWeeklyMode().equals(WeeklyModeEnum.EXACT_DAYS) && !resultDto.getTaskRecurrence().getDaysOfWeek().contains(day);
+
+        if (dayExcluded || notInExactDays)
         {
-
-            boolean dayExcluded = excludedDaysOfWeek.contains(day);
-
-            boolean notInExactDays = taskRecurrence.getWeeklyMode().equals(WeeklyModeEnum.EXACT_DAYS) && !taskRecurrence.getDaysOfWeek().contains(day);
-
-            if (dayExcluded || notInExactDays)
-            {
-                continue;
-            }
-
-
-            int effectiveLatestDayOffset = latestDayOffset;
-            LocalTime effectiveLatestStartTime = latestStartTime;
-
-            if (deadline != null && now != null)
-            {
-                int daysUntilAnchor = daysUntilNextOccurrence(now.getDayOfWeek(), day);
-                LocalDate anchorDate = now.toLocalDate().plusDays(daysUntilAnchor);
-
-                int deadlineDayOffset = (int) ChronoUnit.DAYS.between(anchorDate, deadline.toLocalDate());
-                LocalTime deadlineTime = deadline.toLocalTime();
-
-                if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(startDayOffset, taskStartTime))
-                {
-
-                    continue;
-                }
-
-                if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(latestDayOffset, latestStartTime))
-                {
-                    effectiveLatestDayOffset = deadlineDayOffset;
-                    effectiveLatestStartTime = deadlineTime;
-                }
-            }
-
-
-            int maxSearchDayOffset = startDayOffset + 6;
-            LocalTime endOfMaxDay = LocalTime.of(23, 59);
-            if (toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime) > toRawMinutes(maxSearchDayOffset, endOfMaxDay))
-            {
-                effectiveLatestDayOffset = maxSearchDayOffset;
-                effectiveLatestStartTime = endOfMaxDay;
-            }
-
-
-            int cursorDayOffset = startDayOffset;
-            LocalTime cursor = taskStartTime;
-
-            while (toRawMinutes(cursorDayOffset, cursor) <= toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime))
-            {
-                int actualStartDayOffset = cursorDayOffset;
-                LocalTime actualCandidateStart = cursor;
-
-                ShiftedTime endShift = shift(cursor, taskDurationInMinutes);
-                int actualEndDayOffset = cursorDayOffset + endShift.dayOffset();
-                LocalTime actualCandidateEnd = endShift.time();
-
-                int postPaddingMinutes = bufferTimeInMinutes + durationToleranceMinutes;
-                if (isAfterTask || isBothWay)
-                {
-                    postPaddingMinutes += commuteTimeInMinutes;
-                }
-
-                ShiftedTime paddedEndShift = shift(actualCandidateEnd, postPaddingMinutes);
-                int paddedEndDayOffset = actualEndDayOffset + paddedEndShift.dayOffset();
-                LocalTime paddedCandidateEnd = paddedEndShift.time();
-
-                int paddedStartDayOffset = actualStartDayOffset;
-                LocalTime paddedCandidateStart = actualCandidateStart;
-
-                if (isBeforeTask || isBothWay)
-                {
-                    ShiftedTime paddedStartShift = shift(actualCandidateStart, -commuteTimeInMinutes);
-                    paddedStartDayOffset = actualStartDayOffset + paddedStartShift.dayOffset();
-                    paddedCandidateStart = paddedStartShift.time();
-                }
-
-                DayOfWeek actualStartDay = day.plus(actualStartDayOffset);
-                DayOfWeek actualEndDay = day.plus(actualEndDayOffset);
-                DayOfWeek paddedStartDay = day.plus(paddedStartDayOffset);
-                DayOfWeek paddedEndDay = day.plus(paddedEndDayOffset);
-
-                TimeAndDayRange actualCandidate = new TimeAndDayRange(actualStartDay, actualCandidateStart, actualEndDay, actualCandidateEnd);
-
-                TimeAndDayRange paddedCandidate = new TimeAndDayRange(paddedStartDay, paddedCandidateStart, paddedEndDay, paddedCandidateEnd);
-
-                if (dto.getTimeline().isFree(paddedCandidate))
-                {
-                    return Optional.of(new CandidateResult(actualCandidate, paddedCandidate));
-                }
-
-                ShiftedTime next = shift(cursor, incrementalStep);
-                cursorDayOffset += next.dayOffset();
-                cursor = next.time();
-            }
-
+            return Optional.empty();
         }
+
+
+        int effectiveLatestDayOffset = resultDto.getLatestDayOffset();
+        LocalTime effectiveLatestStartTime = resultDto.getLatestStartTime();
+
+        if (deadline != null && now != null)
+        {
+            int daysUntilAnchor = daysUntilNextOccurrence(now.getDayOfWeek(), day);
+            LocalDate anchorDate = now.toLocalDate().plusDays(daysUntilAnchor);
+
+            int deadlineDayOffset = (int) ChronoUnit.DAYS.between(anchorDate, deadline.toLocalDate());
+            LocalTime deadlineTime = deadline.toLocalTime();
+
+            if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(resultDto.getStartDayOffset(), resultDto.getTaskStartTime()))
+            {
+
+                return Optional.empty();
+            }
+
+            if (toRawMinutes(deadlineDayOffset, deadlineTime) < toRawMinutes(resultDto.getLatestDayOffset(), resultDto.getLatestStartTime()))
+            {
+                effectiveLatestDayOffset = deadlineDayOffset;
+                effectiveLatestStartTime = deadlineTime;
+            }
+        }
+
+
+        int maxSearchDayOffset = resultDto.getStartDayOffset() + 6;
+        LocalTime endOfMaxDay = LocalTime.of(23, 59);
+        if (toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime) > toRawMinutes(maxSearchDayOffset, endOfMaxDay))
+        {
+            effectiveLatestDayOffset = maxSearchDayOffset;
+            effectiveLatestStartTime = endOfMaxDay;
+        }
+
+
+        int cursorDayOffset = resultDto.getStartDayOffset();
+        LocalTime cursor = resultDto.getTaskStartTime();
+
+        while (toRawMinutes(cursorDayOffset, cursor) <= toRawMinutes(effectiveLatestDayOffset, effectiveLatestStartTime))
+        {
+            int actualStartDayOffset = cursorDayOffset;
+            LocalTime actualCandidateStart = cursor;
+
+            ShiftedTime endShift = shift(cursor, resultDto.getTaskDurationInMinutes());
+            int actualEndDayOffset = cursorDayOffset + endShift.dayOffset();
+            LocalTime actualCandidateEnd = endShift.time();
+
+            int postPaddingMinutes = resultDto.getBufferTimeInMinutes() + resultDto.getDurationToleranceMinutes();
+            if (resultDto.isAfterTask() || resultDto.isBothWay())
+            {
+                postPaddingMinutes += resultDto.getCommuteTimeInMinutes();
+            }
+
+            ShiftedTime paddedEndShift = shift(actualCandidateEnd, postPaddingMinutes);
+            int paddedEndDayOffset = actualEndDayOffset + paddedEndShift.dayOffset();
+            LocalTime paddedCandidateEnd = paddedEndShift.time();
+
+            int paddedStartDayOffset = actualStartDayOffset;
+            LocalTime paddedCandidateStart = actualCandidateStart;
+
+            if (resultDto.isBeforeTask() || resultDto.isBothWay())
+            {
+                ShiftedTime paddedStartShift = shift(actualCandidateStart, -resultDto.getCommuteTimeInMinutes());
+                paddedStartDayOffset = actualStartDayOffset + paddedStartShift.dayOffset();
+                paddedCandidateStart = paddedStartShift.time();
+            }
+
+            DayOfWeek actualStartDay = day.plus(actualStartDayOffset);
+            DayOfWeek actualEndDay = day.plus(actualEndDayOffset);
+            DayOfWeek paddedStartDay = day.plus(paddedStartDayOffset);
+            DayOfWeek paddedEndDay = day.plus(paddedEndDayOffset);
+
+            TimeAndDayRange actualCandidate = new TimeAndDayRange(actualStartDay, actualCandidateStart, actualEndDay, actualCandidateEnd);
+
+            TimeAndDayRange paddedCandidate = new TimeAndDayRange(paddedStartDay, paddedCandidateStart, paddedEndDay, paddedCandidateEnd);
+
+            if (resultDto.getDto().getTimeline().isFree(paddedCandidate))
+            {
+                return Optional.of(new CandidateResult(actualCandidate, paddedCandidate));
+            }
+
+            ShiftedTime next = shift(cursor, resultDto.getIncrementalStep());
+            cursorDayOffset += next.dayOffset();
+            cursor = next.time();
+        }
+
 
         return Optional.empty();
 
 
     }
-
 
 
 }

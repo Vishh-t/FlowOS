@@ -4,7 +4,7 @@
 > should read this file before making architectural suggestions. Update it as decisions
 > are made — don't let decisions live only inside a chat transcript.
 
-Last updated: 2026-07-10
+Last updated: 2026-08-22
 
 ---
 
@@ -401,6 +401,47 @@ vs. deciding placement/conflicts") is the check to run whenever that temptation 
 
 ---
 
+## 6b. Plan Update — Adherence-Aware Scheduling (added 2026-08-22)
+
+**Why:** Core insight surfaced during a planning discussion — the primary reason people
+abandon timetables isn't disruption (which the Scheduler already handles via
+rescheduling), it's that plans are unrealistic from the start and nobody course-corrects
+when they keep failing. Dynamic rescheduling alone doesn't fix this; it repairs a broken
+day but doesn't stop the underlying plan from being wrong week after week.
+
+**What changes:** FlowOS's scope is unchanged architecturally — this is an addition to the
+existing plan, not a pivot. The Scheduler Engine (candidate generation, constraint
+validation, scoring, rescheduling — §5 Phase 2) stays exactly as scoped. What's added is a
+feedback layer on top:
+
+1. **Adherence tracking as a first-class signal** — already logged as a standing rule in §6
+   ("every reschedule event must record a reason code, every completion must record a
+   timestamp") but wasn't yet tied to anything actionable. Now: this data should feed back
+   into future candidate generation/scoring, not just sit in Analytics as a historical
+   record.
+2. **Realistic-goal correction** — when a task/goal type shows a persistent low completion
+   rate, the system should surface that and suggest adjusting the goal (frequency,
+   duration, or timing) rather than continuing to generate plans the user has demonstrably
+   not been following. Rule-based (frequency counting over reason codes), not ML —
+   consistent with the existing §8 position.
+3. **Product framing update** — FlowOS is not just "a scheduler that repairs itself when
+   disrupted," it's "a scheduler that repairs itself when disrupted and learns what you'll
+   actually do, so it stops generating plans you were never going to follow." Same engine,
+   sharper thesis.
+
+**Architectural impact:** Minimal at this stage. No new modules — this slots into existing
+Phase 2 (scoring can eventually weight by adherence history) and Phase 3 Analytics (which
+already owns "historical record of planned-vs-actual"). Only concrete near-term addition:
+make sure `Task` completion status + reschedule reason codes are captured from the start
+(already planned per §6), since this is the one piece that's expensive to retrofit later.
+
+**Sequencing:** Does not change the current build order. Still: close Phase 1 → naive
+placement/orchestration → constraint hardening → adherence data model → scoring →
+rescheduling. Adherence-awareness in scoring itself is a Phase 2.3+/Phase 3 concern, not
+something to build now.
+
+---
+
 ## 7. Rescheduling Trigger Taxonomy (for Phase 2.4)
 
 - **Time-shift events:** overslept, running late, finished early.
@@ -458,6 +499,9 @@ enough — don't reach for it upfront.
 
 ## 10. Open Decisions Log
 
+- [ ] Adherence-aware scoring (§6b) — data model for surfacing "realistic-goal correction"
+      suggestions to the user not yet designed; revisit once Phase 2 scoring (§5 Phase 2
+      step 3) is reached.
 - [ ] `generateCandidate`'s current scope (buffer/commute/preferred-range/deadline handling,
       midnight- and week-boundary correctness) already does what §5 Phase 2 describes as
       step 2, "Constraint validation layer" — while step 1, "Naive placement," was meant to

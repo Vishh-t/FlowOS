@@ -27,7 +27,14 @@ want to study every day?"*
 Users define **what** they want to achieve. The application decides **when** those
 activities should happen.
 
-**Core promise:** "A planner that adapts when life doesn't go according to plan."
+**Core promise:** "A planner that adapts when life doesn't go according to plan — and
+learns what you'll actually do, so it stops generating plans you were never going to
+follow."
+
+*(Updated 2026-08-22 — see `ROADMAP.md` §6b for the reasoning: dynamic rescheduling alone
+repairs a broken day but doesn't stop the underlying plan from being unrealistic week after
+week. Adherence tracking + realistic-goal correction is the added feedback layer. Same
+engine, sharper thesis — no architectural change.)*
 
 ---
 
