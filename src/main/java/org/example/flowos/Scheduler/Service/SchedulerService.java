@@ -1,14 +1,18 @@
 package org.example.flowos.Scheduler.Service;
 
+import org.example.flowos.Profile.Entity.Profile;
 import org.example.flowos.Scheduler.DTOs.PlaceTaskDTO;
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
+import org.example.flowos.Scheduler.Helpers.PriorityInterpreter;
 import org.example.flowos.Scheduler.Helpers.RecurrenceInterpreters;
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
 import org.example.flowos.Scheduler.DTOs.CandidateResult;
 import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
 import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;
+import org.example.flowos.Scheduler.Model.WeeklyTimeline;
 import org.example.flowos.Scheduler.Record.PlacementResult;
 import org.example.flowos.Task.Embedables.Recurrence;
+import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
 
@@ -17,10 +21,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
 import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.*;
 
@@ -241,14 +242,32 @@ public class SchedulerService
             {
                 placementDto.getTimeline().occupy(result.get().paddedRange());
                 placedSlots.add(result.get().actualRange());
-            }
-            else
+            } else
             {
                 failedDays.add(day);
             }
         }
 
         return new PlacementResult(targetDays.size(), placedSlots.size(), placedSlots, failedDays);
+    }
+
+    private final PriorityInterpreter priorityInterpreter = new PriorityInterpreter();
+
+    public Map<Task, PlacementResult> placeAll(List<Task> tasks, Profile profile, LocalDateTime now)
+    {
+        WeeklyTimeline timeline = new WeeklyTimeline();
+        List<Task> sortedTasks = priorityInterpreter.sortForPlacement(tasks);
+
+        Map<Task, PlacementResult> results = new LinkedHashMap<>();
+
+        for (Task task : sortedTasks)
+        {
+            PlaceTaskDTO dto = new PlaceTaskDTO(task, profile, timeline, now);
+            PlacementResult result = placeTask(dto);
+            results.put(task, result);
+        }
+
+        return results;
     }
 
 

@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import org.example.flowos.Task.Embedables.EventOccurrence;
 import org.example.flowos.Task.Enums.FlexibilityEnum;
@@ -15,6 +16,7 @@ import java.util.UUID;
 
 @Entity
 @Data
+@EqualsAndHashCode(of = "taskId")
 @AllArgsConstructor
 @NoArgsConstructor
 public class Task

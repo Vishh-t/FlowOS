@@ -4,7 +4,7 @@
 > should read this file before making architectural suggestions. Update it as decisions
 > are made — don't let decisions live only inside a chat transcript.
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 ---
 
@@ -30,38 +30,80 @@ vision doc and is not rewritten for every schema decision.
 - `Auth` module — signUp, logIn, refresh, logout, Google Sign-In, JWT (access + Redis-backed
   refresh tokens), Spring Security filter chain, global exception handling.
 - `User` entity — supports both LOCAL and GOOGLE auth providers on one table.
+- `Task` entity + nested embeddables (`EventOccurrence` → `EventTime`, `TaskTimeRange` ×2,
+  `Recurrence`) — see §3.3 for the actual current shape, which evolved significantly from
+  the original flat sketch. `Profile` entity is done. `TaskRepo` exists.
 
-**In progress:** `Task` entity + nested embeddables (`EventOccurrence` → `EventTime`,
-`TaskTimeRange` ×2, `Recurrence`) — see §3.3 for the actual current shape, which evolved
-significantly from the original flat sketch. `Profile` entity is done.
+**Scheduler Engine — first full end-to-end placement slice complete and tested
+(2026-08-23):** what exists now takes a list of tasks and a profile and returns actual
+placed weekly slots, honoring priority, recurrence, and constrained-vs-flexible timing —
+the first real "input tasks, get a placed week" flow, even though it's still naive
+placement (no scoring, no rescheduling yet). Layers, bottom to top:
 
-**Scheduler Engine — partially started (candidate-generation slice only, see §5 Phase 2
-note below):** `SchedulerService.generateCandidate` exists and handles: midnight-crossing
-wake/sleep windows and padding (a real bug found and fixed via a night-owl profile —
-`shift()` helper tracks day-rollover explicitly instead of relying on bare `LocalTime`
-wrap), the same wraparound bug one level up at the week boundary (Sunday→Monday, fixed by
-tracking day position as a raw non-wrapping offset until the final `TimeAndDayRange` is
-built), and `taskDeadline` as an upper bound on the search (recomputed per candidate day
-since a deadline's distance from each day differs; days where the deadline's occurrence has
-already passed are skipped outright). Verified via a standalone compiled dry run against the
-real algorithm code (not just read-through) covering these cases.
+- **`generateCandidate`** — finds one valid slot on one specific target day (a signature
+  change from the original "free-scan across all 7 days" design — day selection was moved
+  out to the caller once multi-occurrence recurring tasks exposed a real bug, see below).
+  Handles: midnight-crossing wake/sleep windows and padding (`shift()` helper tracks
+  day-rollover explicitly instead of relying on bare `LocalTime` wrap), the week-boundary
+  wraparound (Sunday→Monday, fixed by tracking day position as a raw non-wrapping offset
+  until the final `TimeAndDayRange` is built), and `taskDeadline` as an upper bound on the
+  search (recomputed per candidate day; days where the deadline's occurrence has already
+  passed are skipped outright).
+- **`RecurrenceInterpreters.resolveTargetDays`** — translates a task's `Recurrence` (type +
+  weekly mode + day-set/count + exclusions) into a concrete `List<DayOfWeek>` for the caller
+  to loop over. `EXACT_DAYS` returns the explicit day-set (minus exclusions). `COUNT_ONLY`
+  calls `pickSpreadDays`, which spreads occurrences across distinct available days first and
+  only wraps around to double up a day once every available day already has one occurrence
+  (`i % availableDays.size()`) — correctly handles `timesPerWeek` exceeding 7 (e.g. 2x/day
+  patterns), which an earlier naive-cap version would have silently dropped.
+- **`SchedulerService.placeTask`** — orchestrates one task's full placement: resolves target
+  days, calls `generateCandidate` once per day, occupies the shared `WeeklyTimeline` on
+  success, and returns a `PlacementResult(requested, placed, placedSlots, failedDays)`.
+  Deliberate product decision: **partial success is not rolled back** — whatever occurrences
+  place, stay placed; `failedDays` reports the rest so the caller/UI can surface it, rather
+  than an all-or-nothing failure. Matches the adherence-tracking philosophy in §6b (a task
+  that can't fully place is itself a signal, not just an error).
+- **`PriorityInterpreter.sortForPlacement`** — decides placement order across multiple tasks:
+  primary key `TaskPriorityEnum.ordinal()` descending (CRITICAL first), secondary key
+  "has a `preferredTimeRange`" before "no range" within the same priority tier — a
+  most-constrained-first heuristic so a flexible task doesn't accidentally claim the one slot
+  a constrained task actually needed.
+- **`SchedulerService.placeAll`** — the top-level entry point: sorts the task list via
+  `PriorityInterpreter`, then loops `placeTask` over one shared `WeeklyTimeline` so every
+  task sees prior placements as occupied. Returns `Map<Task, PlacementResult>` (not a
+  parallel list) for direct per-task lookup by the caller. Required scoping `Task`'s
+  `equals`/`hashCode` to `taskId` only (`@EqualsAndHashCode(of = "taskId")`) — Lombok's
+  default all-fields `@Data` equality was unsafe as a map key since `event` mutates after
+  insertion.
 
-**Known gaps in this slice, not yet addressed:**
-- Nothing yet constructs a `GenerateCandidateDTO` and populates `.now` — the deadline logic
-  is correct but inert until some caller/orchestrator exists to invoke `generateCandidate`
-  at all.
+**Verification:** both layers were dry-run tested via standalone compiled sandboxes (not
+just read-through) — `generateCandidate` against three bug-repro scenarios (see git history
+for the day-1 bugs), and this slice against three integration scenarios: same-priority
+no-overlap (baseline), CRITICAL vs LOW competing for an identical slot (confirmed sort order,
+not input order, decides the winner), and same-priority ranged-vs-plain (confirmed
+most-constrained-first tie-breaking). All passed as designed.
+
+**Known gaps, not yet addressed:**
 - No lower bound preventing a candidate from being placed before `now` — only the deadline
-  (upper bound) is enforced.
+  (upper bound) is enforced. Deferred: irrelevant for "regenerate whole week fresh" (the
+  current use case), only matters once mid-week rescheduling (§7) reuses `generateCandidate`.
 - `WeeklyTimeline` is architecturally a single recurring week (no "which week" concept) —
-  a deadline pushing the search past 7 days out is now clamped to avoid silently aliasing
-  onto the wrong day, but multi-week scheduling isn't actually representable yet. Real
-  limitation, not a bug — needs a deliberate decision before it matters (e.g. an assignment
-  due in 3 weeks).
-- `Recurrence.dayOfMonth`/`monthOfYear`/`timesPerWeek` are still unread by
-  `generateCandidate` — `MONTHLY`/`ANNUALLY`/`COUNT_ONLY` recurrence isn't implemented, as
-  originally scoped for later.
-- Where this work actually sits against the Phase 2.1/2.2 split below is an open question —
-  see §10.
+  a deadline pushing the search past 7 days out is clamped to avoid silently aliasing onto
+  the wrong day, but multi-week scheduling isn't representable yet.
+- `Recurrence.dayOfMonth`/`monthOfYear` still unread — `MONTHLY`/`ANNUALLY` recurrence
+  throws `UnsupportedOperationException` in `resolveTargetDays`, as originally scoped for
+  later.
+- `FlexibilityEnum` (`FIXED`/`ANCHORED`/`FLEXIBLE`) is stored but not yet read anywhere —
+  confirmed via discussion that it governs rescheduling behavior (what's allowed to move
+  when a trigger fires), not initial placement, so this is correctly inert until §7 is built,
+  not a bug.
+- No constraint-validation/scoring/multi-candidate layer beyond first-fit — `generateCandidate`
+  returns the first valid slot found, not the best of several candidates. This is still
+  "naive placement," consistent with where Phase 2 currently stands.
+- Where this work sits against the Phase 2.1/2.2 split is now more resolved in practice
+  (`generateCandidate` + `placeTask`/`placeAll` together cover both "naive placement" and
+  "constraint validation" as originally scoped) — worth a final explicit decision to close
+  out §10's open item.
 
 **Not started yet:** Import, Calendar, Notifications, Analytics, AI Parser, and the rest of
 the Scheduler Engine (naive full-placement pipeline, constraint validation layer beyond what
@@ -300,19 +342,45 @@ No controller/service layer yet — no endpoint needs this until onboarding/task
 exists, and that's not blocking Phase 2. Just get entities + repos compiling and persisting.
 
 ### Phase 2 — Scheduler Engine (the real learning starts here)
-1. **Naive placement** — place all `FIXED` tasks first (they define the skeleton), then
-   greedily place `ANCHORED`/`FLEXIBLE` tasks by priority into remaining free time. No
-   scoring, no candidates yet — goal is a working end-to-end pipeline.
-2. **Constraint validation layer** — sleep protection (respect `Profile.wakeTime`/
-   `sleepTime`), no double-booking, respecting `ANCHORED` preferred time range +
-   `preferredTimeRange`, respecting `commuteTimeInMinutes` around `FIXED` tasks, respecting
-   `bufferTimeInMinutes` between tasks.
-3. **Multi-candidate + scoring** — generate several candidate schedules, score on: goal
-   completion, sleep preservation, workload balance, context-switch minimization, preference
-   alignment. Real algorithm-design discussion (greedy vs. backtracking vs. CSP vs. local
-   search) happens when this phase is reached, not before.
+1. **Naive placement + constraint validation — DONE (2026-08-23).** `generateCandidate` +
+   `resolveTargetDays` + `placeTask` + `sortForPlacement` + `placeAll` together cover what
+   this step and step 2 below originally described separately — see §2 for the full
+   breakdown and §10 for the resolved 2.1/2.2 boundary question.
+2. ~~Constraint validation layer~~ — folded into step 1 above, see §10.
+3. **Multi-candidate + scoring — NOT STARTED, next up.** Concrete decisions made in
+   discussion, recorded here so they're not re-litigated:
+   - **Multi-start greedy first, not backtracking.** Run the existing `placeAll` several
+     times with different task orderings (current priority+constraint order; also
+     shortest-duration-first; also earliest-deadline-first), producing several distinct full
+     `WeeklyTimeline`s instead of one. Each run reuses the current greedy algorithm as-is —
+     no undo/backtracking logic needed. Score each resulting timeline, keep the best.
+   - **Real backtracking/CSP search is explicitly deferred, not built preemptively.** It
+     solves a real failure mode of greedy (a placement choice that's individually valid can
+     make a later task unplaceable, when a different valid choice wouldn't have) — but that
+     failure mode hasn't been observed yet, and one person's weekly task count is small
+     enough that multi-start greedy will likely cover it. Only escalate to backtracking with
+     concrete evidence multi-start greedy fails to find arrangements that provably exist.
+   - **Scoring function** — hand-written weighted objective (not ML — see §8), over: goal
+     completion (`PlacementResult.placed / requested`, aggregated across tasks), sleep
+     preservation, workload balance, minimal fragmentation/context-switching — per the
+     original §5 factor list. Pick the highest-scoring valid candidate.
 4. **Rescheduling engine** — reacts to trigger types (see §7). Architecturally distinct from
-   initial generation: partial re-optimization, not full regeneration.
+   initial generation: partial re-optimization, not full regeneration. This is the first
+   point where `FlexibilityEnum` (`FIXED`/`ANCHORED`/`FLEXIBLE`) actually gets read —
+   confirmed through discussion it governs *resistance to being moved during rescheduling*,
+   not initial-placement flexibility, so it's correctly unused until this phase.
+
+### Phase 2.3 — Make the scheduler reachable (plumbing, before more algorithm work)
+Realized during review: nothing outside a dry-run test can currently invoke `placeAll` —
+this is the actual next concrete action, ahead of scoring/multi-start work, since it's what
+turns tested-but-inert logic into something a frontend or API client can use.
+1. **REST endpoint(s)** — e.g. `POST /schedule/generate`, taking a task list (or reading via
+   `TaskRepo` for the logged-in user) + `Profile`, returning the `Map<Task, PlacementResult>`
+   (or a DTO projection of it).
+2. **Persist the result** — currently `placeAll` computes placements in memory only; nothing
+   writes back to `EventOccurrence.allottedTimeRange` or saves via `TaskRepo`. Needs a
+   decision on save semantics (e.g. does regenerating overwrite prior placements wholesale,
+   or merge?) — open, see §10.
 
 ### Phase 3 — Consumers of the scheduler's output
 - `Calendar` (today view, week view)
@@ -502,13 +570,21 @@ enough — don't reach for it upfront.
 - [ ] Adherence-aware scoring (§6b) — data model for surfacing "realistic-goal correction"
       suggestions to the user not yet designed; revisit once Phase 2 scoring (§5 Phase 2
       step 3) is reached.
-- [ ] `generateCandidate`'s current scope (buffer/commute/preferred-range/deadline handling,
-      midnight- and week-boundary correctness) already does what §5 Phase 2 describes as
-      step 2, "Constraint validation layer" — while step 1, "Naive placement," was meant to
-      come first with no such validation. Does the Phase 2.1/2.2 boundary need redrawing to
-      match how the code actually evolved, or should a genuinely-naive placement pass still
-      be built first/separately, with `generateCandidate` folded in afterward as the 2.2
-      layer? Revisit before writing whatever calls `generateCandidate` for the first time.
+- [x] `generateCandidate`'s scope vs. the Phase 2.1/2.2 split → **Resolved (2026-08-23):**
+      `generateCandidate` + `resolveTargetDays` + `placeTask` + `sortForPlacement` +
+      `placeAll` together cover both "naive placement" and "constraint validation" as
+      originally scoped as two separate steps — no redraw needed, the code just ended up
+      doing both in one integrated slice. See §2 and §5 Phase 2 step 1.
+- [ ] REST endpoint contract for `placeAll` (§5 Phase 2.3) — request/response shape not yet
+      decided (raw task list vs. reading from `TaskRepo`; full `PlacementResult` map vs. a
+      simplified DTO).
+- [ ] Save semantics for placement results (§5 Phase 2.3) — does regenerating a week
+      overwrite prior `allottedTimeRange` values wholesale, or merge/preserve unaffected
+      tasks? Matters once rescheduling (§7) needs to distinguish "freshly generated" from
+      "already placed, don't touch."
+- [ ] Backtracking/CSP escalation trigger (§5 Phase 2 step 3) — deferred until multi-start
+      greedy is built and tested; revisit only with concrete evidence of unfindable valid
+      arrangements, not preemptively.
 - [ ] One general re-optimize function vs. specialized fast-path handlers per reschedule
       trigger type? (Revisit at Phase 2.4)
 - [ ] Grace period behavior for "passive drift" (task not started, not explicitly skipped)?

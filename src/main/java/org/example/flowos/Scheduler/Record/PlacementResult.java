@@ -7,6 +7,4 @@ import java.util.List;
 
 public record PlacementResult(int requested, int placed, List<TimeAndDayRange> placedSlots, List<DayOfWeek> failedDays)
 {
-
-
 }
