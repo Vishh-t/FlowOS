@@ -1,8 +1,11 @@
 package org.example.flowos.Scheduler.Helpers;
 
+import org.springframework.stereotype.Component;
+
 import java.time.DayOfWeek;
 import java.time.LocalTime;
 
+@Component
 public class GenerateCandidateHelperMethods
 {
 

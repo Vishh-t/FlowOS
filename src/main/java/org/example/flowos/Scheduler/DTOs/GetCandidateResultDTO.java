@@ -12,36 +12,36 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class GetCandidateResultDTO
 {
-    GenerateCandidateDTO dto;
+    private GenerateCandidateDTO dto;
 
-    Set<DayOfWeek> excludedDaysOfWeek;
+    private Set<DayOfWeek> excludedDaysOfWeek;
 
 
-    Recurrence taskRecurrence;
+    private Recurrence taskRecurrence;
 
-    LocalTime taskStartTime;
+    private LocalTime taskStartTime;
 
-    LocalTime latestStartTime;
+    private LocalTime latestStartTime;
 
-    int startDayOffset;
+    private int startDayOffset;
 
-    int latestDayOffset;
+    private int latestDayOffset;
 
-    int taskDurationInMinutes;
+    private int taskDurationInMinutes;
 
-    int incrementalStep;
+    private int incrementalStep;
 
-    int bufferTimeInMinutes;
+    private int bufferTimeInMinutes;
 
-    int durationToleranceMinutes;
+    private int durationToleranceMinutes;
 
-    int commuteTimeInMinutes;
+    private int commuteTimeInMinutes;
 
-    boolean isBeforeTask;
+    private boolean isBeforeTask;
 
-    boolean isAfterTask;
+    private boolean isAfterTask;
 
-    boolean isBothWay;
+    private boolean isBothWay;
 
 
 }

@@ -1,12 +1,13 @@
 package org.example.flowos.Scheduler.Service;
 
+import lombok.RequiredArgsConstructor;
 import org.example.flowos.Profile.Entity.Profile;
 import org.example.flowos.Scheduler.DTOs.PlaceTaskDTO;
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
 import org.example.flowos.Scheduler.Helpers.PriorityInterpreter;
 import org.example.flowos.Scheduler.Helpers.RecurrenceInterpreters;
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
-import org.example.flowos.Scheduler.DTOs.CandidateResult;
+import org.example.flowos.Scheduler.Record.CandidateResult;
 import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
 import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;
 import org.example.flowos.Scheduler.Model.WeeklyTimeline;
@@ -15,6 +16,7 @@ import org.example.flowos.Task.Embedables.Recurrence;
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
+import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -25,6 +27,8 @@ import java.util.*;
 
 import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.*;
 
+@Service
+@RequiredArgsConstructor
 public class SchedulerService
 {
     Optional<CandidateResult> generateCandidate(GenerateCandidateDTO dto)
@@ -220,7 +224,7 @@ public class SchedulerService
 
     }
 
-    private final RecurrenceInterpreters recurrenceInterpreters = new RecurrenceInterpreters();
+    private final RecurrenceInterpreters recurrenceInterpreters ;
 
     public PlacementResult placeTask(PlaceTaskDTO placementDto)
     {
@@ -251,7 +255,7 @@ public class SchedulerService
         return new PlacementResult(targetDays.size(), placedSlots.size(), placedSlots, failedDays);
     }
 
-    private final PriorityInterpreter priorityInterpreter = new PriorityInterpreter();
+    private final PriorityInterpreter priorityInterpreter ;
 
     public Map<Task, PlacementResult> placeAll(List<Task> tasks, Profile profile, LocalDateTime now)
     {

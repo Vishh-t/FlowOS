@@ -14,14 +14,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class GenerateCandidateDTO
 {
-    Task task;
+    private Task task;
 
-    Profile userProfile;
+    private Profile userProfile;
 
-    WeeklyTimeline timeline;
+    private WeeklyTimeline timeline;
 
-    LocalDateTime now;
+    private LocalDateTime now;
 
-    DayOfWeek targetDay;
+    private DayOfWeek targetDay;
 
 }

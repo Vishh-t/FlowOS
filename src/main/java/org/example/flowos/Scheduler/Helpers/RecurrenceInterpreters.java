@@ -3,6 +3,7 @@ package org.example.flowos.Scheduler.Helpers;
 import org.example.flowos.Task.Embedables.Recurrence;
 import org.example.flowos.Task.Enums.RecurrenceTypeEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
+import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
 import java.time.LocalDateTime;
@@ -11,6 +12,7 @@ import java.util.HashSet;
 import java.util.List;
 
 
+@Component
 public class RecurrenceInterpreters
 {
     public  List<DayOfWeek> resolveTargetDays(Recurrence recurrence, LocalDateTime now)

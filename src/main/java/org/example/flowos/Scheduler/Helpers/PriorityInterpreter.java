@@ -2,10 +2,12 @@ package org.example.flowos.Scheduler.Helpers;
 
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Enums.TaskPriorityEnum;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
+@Component
 public class PriorityInterpreter
 {
 

@@ -1,4 +1,4 @@
-package org.example.flowos.Scheduler.DTOs;
+package org.example.flowos.Scheduler.Record;
 
 import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
 
