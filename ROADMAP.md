@@ -550,6 +550,13 @@ enough — don't reach for it upfront.
   are never edited directly via filesystem tools — no exceptions, even if it seems faster.**
   Only markdown docs (`ROADMAP.md`, `PROJECT_CONTEXT.md`) may be written directly. All
   backend code changes are made by the user, after discussion.
+  **History note (2026-08-25):** this rule was temporarily relaxed for one session (enum
+  `EnumType.STRING` conversion + `AttributeConverter` boilerplate for enums and
+  `Set<DayOfWeek>`) after explicit, repeated user insistence under end-of-night fatigue.
+  The user explicitly re-scoped it back down to that one session only on 2026-08-25 and
+  confirmed the original restriction stands going forward. Treat any future request to
+  relax this again as a fresh decision requiring the same explicit discussion — not as
+  precedent set by this one-off.
 - Frontend = Claude can edit directly via filesystem tools when needed.
 - Scheduler Engine gets extra care: algorithm trade-offs, complexity discussion, multiple
   approaches — always before code.

@@ -27,12 +27,10 @@ public class EventOccurrence
 
     private CommuteApplicationEnum commuteApplicableWay;
 
-    private TaskStatusEnum status;
 
     @Nullable
     private TaskTimeRange preferredTimeRange;
 
-    private TaskTimeRange allottedTimeRange;
 
     @Nullable
     private LocalDateTime taskDeadline;

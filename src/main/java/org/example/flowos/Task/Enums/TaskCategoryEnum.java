@@ -2,14 +2,23 @@ package org.example.flowos.Task.Enums;
 
 public enum TaskCategoryEnum
 {
-    ACADEMICS,      // college, classes, exams, assignments
-    SKILL_BUILDING, // DSA, coding practice, personal projects, learning new tech
-    FITNESS,        // gym, sports, workouts
-    HEALTH,         // meals, sleep-adjacent, medical, self-care
-    SOCIAL,         // hang-outs, calls, family time
-    LEISURE,        // Netflix, gaming, Instagram, YouTube
-    CHORES,         // errands, cleaning, admin/life-maintenance tasks
-    CAREER,         // placement prep, interviews, resume work, networking
-    PERSONAL_GROWTH // hobbies like guitar, reading, journaling — things that aren't "skill for a job" but aren't pure leisure either
-}
+    ACADEMICS("CAT_ACADEMICS"),
+    SKILL_BUILDING("CAT_SKILL_BUILDING"),
+    FITNESS("CAT_FITNESS"),
+    HEALTH("CAT_HEALTH"),
+    SOCIAL("CAT_SOCIAL"),
+    LEISURE("CAT_LEISURE"),
+    CHORES("CAT_CHORES"),
+    CAREER("CAT_CAREER"),
+    PERSONAL_GROWTH("CAT_PERSONAL_GROWTH");
 
+    private final String code;
+    TaskCategoryEnum(String code) { this.code = code; }
+    public String getCode() { return code; }
+
+    public static TaskCategoryEnum fromCode(String code)
+    {
+        for (var v : values()) if (v.code.equals(code)) return v;
+        throw new IllegalArgumentException("Unknown TaskCategoryEnum code: " + code);
+    }
+}

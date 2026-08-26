@@ -28,7 +28,7 @@ public class TaskCreationHelpers
     {
         EventOccurrence event = existingTask.getEvent();
         applyDTOToTaskAndEvent(existingTask, event, dto);
-        // event's status/allottedTimeRange are untouched since we reused the existing EventOccurrence
+
     }
 
     private static void applyDTOToTaskAndEvent(Task task, EventOccurrence event, CreateTaskDTO dto)

@@ -1,4 +1,4 @@
-package org.example.flowos.Scheduler.Helpers;
+package org.example.flowos.Scheduler.Model;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

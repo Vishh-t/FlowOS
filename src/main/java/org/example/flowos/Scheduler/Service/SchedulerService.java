@@ -6,7 +6,7 @@ import org.example.flowos.Scheduler.DTOs.PlaceTaskDTO;
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
 import org.example.flowos.Scheduler.Helpers.PriorityInterpreter;
 import org.example.flowos.Scheduler.Helpers.RecurrenceInterpreters;
-import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
+import org.example.flowos.Scheduler.Model.TimeAndDayRange;
 import org.example.flowos.Scheduler.Record.CandidateResult;
 import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
 import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;

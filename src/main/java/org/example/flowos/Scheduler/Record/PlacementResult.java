@@ -1,6 +1,6 @@
 package org.example.flowos.Scheduler.Record;
 
-import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
+import org.example.flowos.Scheduler.Model.TimeAndDayRange;
 
 import java.time.DayOfWeek;
 import java.util.List;

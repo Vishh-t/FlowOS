@@ -1,7 +1,5 @@
 package org.example.flowos.Scheduler.Model;
 
-import org.example.flowos.Scheduler.Helpers.TimeAndDayRange;
-
 import java.util.ArrayList;
 import java.util.List;
 
