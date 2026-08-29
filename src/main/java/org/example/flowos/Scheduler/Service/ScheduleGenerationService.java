@@ -5,6 +5,8 @@ import org.example.flowos.Profile.Entity.Profile;
 import org.example.flowos.Profile.Repo.ProfileRepo;
 import org.example.flowos.Scheduler.Model.TimeAndDayRange;
 import org.example.flowos.Scheduler.Record.PlacementResult;
+import org.example.flowos.Scheduler.Record.ScheduleGenerationResult;
+import org.example.flowos.Task.DTO.FailedOccurrenceDTO;
 import org.example.flowos.Task.Embedables.TaskTimeRange;
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Entity.TaskInstance;
@@ -15,6 +17,7 @@ import org.example.flowos.User.Entity.User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.DayOfWeek;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +34,7 @@ public class ScheduleGenerationService
 
     @Transactional // whenever a function does more than one db writes ,
     // so due to this either all pass or all fail , this prevents inconsistency across different databases
-    public List<TaskInstance> generateSchedule(User user, LocalDateTime now)
+    public ScheduleGenerationResult generateSchedule(User user, LocalDateTime now)
     {
         List<Task> tasks = taskRepo.findAllByUser(user);
         Profile profile = profileRepo.findById(user.getUserId())
@@ -40,6 +43,7 @@ public class ScheduleGenerationService
         Map<Task, PlacementResult> placements = schedulerService.placeAll(tasks, profile, now);
 
         List<TaskInstance> savedInstances = new ArrayList<>();
+        List<FailedOccurrenceDTO> failedOccurrences = new ArrayList<>();
 
         for (Map.Entry<Task, PlacementResult> entry : placements.entrySet())
         {
@@ -59,8 +63,13 @@ public class ScheduleGenerationService
 
                 savedInstances.add(taskInstanceRepo.save(instance));
             }
+
+            for (DayOfWeek failedDay : result.failedDays())
+            {
+                failedOccurrences.add(new FailedOccurrenceDTO(task.getTaskName(), failedDay));
+            }
         }
 
-        return savedInstances;
+        return new ScheduleGenerationResult(savedInstances, failedOccurrences);
     }
 }

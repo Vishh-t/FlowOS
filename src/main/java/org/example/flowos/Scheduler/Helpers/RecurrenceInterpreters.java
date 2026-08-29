@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 
 @Component
@@ -83,10 +84,23 @@ public class RecurrenceInterpreters
 
         for (int i = 0; i < timesPerWeek; i++)
         {
-            int index = i % availableDays.size(); // wraps around once past distinct days
+            int index = (i * availableDays.size()) / timesPerWeek;
             result.add(availableDays.get(index));
         }
 
         return result;
+    }
+
+    public List<DayOfWeek> getAvailableDays(Recurrence recurrence)
+    {
+        Set<DayOfWeek> excluded = recurrence.getExcludedDaysOfWeek();
+        if (excluded == null) { excluded = new HashSet<>(); }
+
+        List<DayOfWeek> allDays = new ArrayList<>();
+        for (DayOfWeek d : DayOfWeek.values())
+        {
+            if (!excluded.contains(d)) { allDays.add(d); }
+        }
+        return allDays;
     }
 }

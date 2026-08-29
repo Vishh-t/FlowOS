@@ -15,6 +15,7 @@ import org.example.flowos.Scheduler.Record.PlacementResult;
 import org.example.flowos.Task.Embedables.Recurrence;
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
+import org.example.flowos.Task.Enums.RecurrenceTypeEnum;
 import org.example.flowos.Task.Enums.WeeklyModeEnum;
 import org.springframework.stereotype.Service;
 
@@ -123,15 +124,6 @@ public class SchedulerService
 
         DayOfWeek day = resultDto.getDto().getTargetDay();
 
-        boolean dayExcluded = resultDto.getExcludedDaysOfWeek().contains(day);
-
-        boolean notInExactDays = resultDto.getTaskRecurrence().getWeeklyMode().equals(WeeklyModeEnum.EXACT_DAYS) && !resultDto.getTaskRecurrence().getDaysOfWeek().contains(day);
-
-        if (dayExcluded || notInExactDays)
-        {
-            return Optional.empty();
-        }
-
 
         int effectiveLatestDayOffset = resultDto.getLatestDayOffset();
         LocalTime effectiveLatestStartTime = resultDto.getLatestStartTime();
@@ -228,28 +220,57 @@ public class SchedulerService
 
     public PlacementResult placeTask(PlaceTaskDTO placementDto)
     {
-        List<DayOfWeek> targetDays = recurrenceInterpreters.resolveTargetDays(
-                placementDto.getTask().getEvent().getTaskRecurrence(), placementDto.getNow());
+        Recurrence recurrence = placementDto.getTask().getEvent().getTaskRecurrence();
+        List<DayOfWeek> targetDays = recurrenceInterpreters.resolveTargetDays(recurrence, placementDto.getNow());
+
+        boolean allowFallback = recurrence.getRecurrenceTypeEnum() == RecurrenceTypeEnum.WEEKLY
+                && recurrence.getWeeklyMode() == WeeklyModeEnum.COUNT_ONLY;
+
+        List<DayOfWeek> fallbackPool = allowFallback
+                ? recurrenceInterpreters.getAvailableDays(recurrence)
+                : List.of();
+
+        // every target day is "reserved" upfront so one occurrence's fallback can't steal another's day
+        Set<DayOfWeek> claimedDays = new HashSet<>(targetDays);
 
         List<TimeAndDayRange> placedSlots = new ArrayList<>();
         List<DayOfWeek> failedDays = new ArrayList<>();
 
-        for (DayOfWeek day : targetDays)
+        for (DayOfWeek originalDay : targetDays)
         {
-            GenerateCandidateDTO dto = new GenerateCandidateDTO(
-                    placementDto.getTask(), placementDto.getProfile(),
-                    placementDto.getTimeline(), placementDto.getNow(), day);
+            DayOfWeek candidateDay = originalDay;
+            boolean placed = false;
 
-            Optional<CandidateResult> result = generateCandidate(dto);
+            while (true)
+            {
+                GenerateCandidateDTO dto = new GenerateCandidateDTO(
+                        placementDto.getTask(), placementDto.getProfile(),
+                        placementDto.getTimeline(), placementDto.getNow(), candidateDay);
 
-            if (result.isPresent())
-            {
-                placementDto.getTimeline().occupy(result.get().paddedRange());
-                placedSlots.add(result.get().actualRange());
-            } else
-            {
-                failedDays.add(day);
+                Optional<CandidateResult> result = generateCandidate(dto);
+
+                if (result.isPresent())
+                {
+                    placementDto.getTimeline().occupy(result.get().paddedRange());
+                    placedSlots.add(result.get().actualRange());
+                    claimedDays.add(candidateDay);
+                    placed = true;
+                    break;
+                }
+
+                if (!allowFallback) { break; }
+
+                Optional<DayOfWeek> next = fallbackPool.stream()
+                        .filter(d -> !claimedDays.contains(d))
+                        .findFirst();
+
+                if (next.isEmpty()) { break; } // no untried, unclaimed day left
+
+                candidateDay = next.get();
+                claimedDays.add(candidateDay); // mark as attempted so it won't be retried by another occurrence
             }
+
+            if (!placed) { failedDays.add(originalDay); }
         }
 
         return new PlacementResult(targetDays.size(), placedSlots.size(), placedSlots, failedDays);

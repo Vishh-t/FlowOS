@@ -1,6 +1,8 @@
 package org.example.flowos.Scheduler.Controller;
 
 import lombok.RequiredArgsConstructor;
+import org.example.flowos.Scheduler.Record.ScheduleGenerationResult;
+import org.example.flowos.Task.DTO.ScheduleGenerationResponseDTO;
 import org.example.flowos.Task.Helper.ScheduleGeneratorHelperMethods;
 import org.example.flowos.Scheduler.Service.ScheduleGenerationService;
 import org.example.flowos.Task.DTO.TaskInstanceResponseDTO;
@@ -30,17 +32,16 @@ public class SchedulerController
     {
         LocalDateTime now = LocalDateTime.now();
 
-        List<TaskInstance> instances = scheduleGenerationService.generateSchedule(user, now);
+        ScheduleGenerationResult result = scheduleGenerationService.generateSchedule(user, now);
 
-        Map<DayOfWeek, List<TaskInstanceResponseDTO>> grouped = instances.stream()
+        Map<DayOfWeek, List<TaskInstanceResponseDTO>> grouped = result.placedInstances().stream()
                 .collect(Collectors.groupingBy(
                         TaskInstance::getOccurrenceDay,
-                        Collectors.mapping(
-                                ScheduleGeneratorHelperMethods::fromEntity,
-                                Collectors.toList()
-                        )
+                        Collectors.mapping(ScheduleGeneratorHelperMethods::fromEntity, Collectors.toList())
                 ));
 
-        return ResponseEntity.ok(grouped);
+        ScheduleGenerationResponseDTO response = new ScheduleGenerationResponseDTO(grouped, result.failedOccurrences());
+
+        return ResponseEntity.ok(response);
     }
 }

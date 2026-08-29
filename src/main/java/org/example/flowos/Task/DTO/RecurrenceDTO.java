@@ -19,7 +19,7 @@ public class RecurrenceDTO
     @NotNull
     RecurrenceTypeEnum recurrenceTypeEnum;
 
-    @NotNull
+
     WeeklyModeEnum weeklyMode;
 
 
@@ -47,6 +47,16 @@ public class RecurrenceDTO
         if (weeklyMode == WeeklyModeEnum.COUNT_ONLY)
         {
             return timesPerWeek != null && timesPerWeek > 0;
+        }
+        return true;
+    }
+
+    @AssertTrue(message = "weeklyMode is required when recurrenceTypeEnum is WEEKLY")
+    public boolean isWeeklyModeValid()
+    {
+        if (recurrenceTypeEnum == RecurrenceTypeEnum.WEEKLY)
+        {
+            return weeklyMode != null;
         }
         return true;
     }

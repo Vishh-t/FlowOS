@@ -4,7 +4,7 @@
 > should read this file before making architectural suggestions. Update it as decisions
 > are made — don't let decisions live only inside a chat transcript.
 
-Last updated: 2026-08-23
+Last updated: 2026-08-27
 
 ---
 
@@ -110,11 +110,146 @@ the Scheduler Engine (naive full-placement pipeline, constraint validation layer
 `generateCandidate` already does, multi-candidate scoring, rescheduling).
 No React Native frontend exists yet — backend-only repo so far.
 
-**Known minor issues flagged, not yet fixed (backend is user's learning area — not fixed by Claude):**
-- JWT access token expiry (15 min) is hardcoded in `JwtUtil`, not externalized to
-  `application.properties`.
-- `JwtFilter` silently swallows all exceptions (including `NotFoundException` for a deleted
-  user) into a debug log — worth a deliberate decision on whether that's desired.
+**Known minor issues flagged, not yet fixed:** see `ISSUES_LOG.md` ("Minor, flagged but not
+yet fixed" section) for the full list (JWT expiry hardcoding, `JwtFilter` exception
+swallowing, etc.) — kept out of this file now that a dedicated bug log exists.
+
+---
+
+## 2a. Session Update (2026-08-25 → 2026-08-27) — Persistence hardening, REST plumbing, and real testing
+
+This closes out most of Phase 2.3 (§5) and resolves several of the open items logged below.
+Covers three distinct chunks of work, in order.
+
+### 2a.1 Persistence hardening (2026-08-25)
+- **Enum persistence fixed.** All 8 enum fields across `Task`, `EventOccurrence`,
+  `Recurrence`, `Profile` were on default `EnumType.ORDINAL` (stores array index — silently
+  corrupts data on reorder). Fixed via 8 dedicated `AttributeConverter<Enum, String>` classes
+  (`@Converter(autoApply = true)`), each mapping to a stable string code independent of the
+  Java constant's name or position — survives both reordering and renaming, not just
+  reordering (which `EnumType.STRING` alone would have covered).
+- **`Set<DayOfWeek>` persistence fixed.** `Recurrence.daysOfWeek`/`excludedDaysOfWeek` had no
+  mapping strategy at all (bare collection fields inside a nested `@Embeddable` aren't
+  mapped by JPA without `@ElementCollection` or a converter). Resolved via one
+  `AttributeConverter<Set<DayOfWeek>, String>` (comma-joined names), `autoApply = true`
+  binds it to both fields automatically since they share the exact same generic type.
+  Deliberately chose converter-to-single-column over `@ElementCollection`
+  (separate join table) — matches the actual read pattern (`RecurrenceInterpreters` always
+  loads the whole set into Java, nothing queries "which recurrences include Monday" at the
+  SQL level) and avoids double-nested-embeddable join-table complexity. `null` vs. empty set
+  preserved as distinct states (unset vs. deliberately-empty), not collapsed.
+- **`SchedulerService`, `RecurrenceInterpreters`, `PriorityInterpreter`** — wired into Spring
+  DI properly (`@Service`/`@Component` + constructor injection), replacing bare `new X()`
+  field initializers from the original dry-run-only version.
+- Working agreement (§9) was temporarily relaxed for this one session to let Claude write
+  these files directly, then explicitly re-scoped back to the standing restriction
+  afterward — see the history note already in §9.
+
+### 2a.2 New entity: `TaskInstance` — the placement-storage gap, resolved
+**The gap:** `SchedulerService.placeAll` returns `Map<Task, PlacementResult>`, and
+`PlacementResult.placedSlots` is a `List<TimeAndDayRange>` — one task can have multiple
+distinct placed occurrences (e.g. gym on Mon/Wed/Fri, independently searched, not guaranteed
+to land at the same time). But `EventOccurrence.allottedTimeRange` was a single field —
+nowhere to store more than one placement per task.
+
+**Resolution:** new entity `TaskInstance` (`Task/Entity/TaskInstance.java`) — one row per
+placed occurrence: own `@Id UUID` (own identity, deliberately not `@Embeddable`, since it
+needs independent rows — first attempt wrongly used `@Embeddable` + `taskId` as `@Id`, which
+would have capped one task to exactly one occurrence, defeating the purpose), `@ManyToOne
+Task task`, `occurrenceDay` (`DayOfWeek`), `time` (`@Embedded TaskTimeRange`), `status`
+(`TaskStatusEnum`), `timeOfCompletion` (nullable `LocalDateTime`, unset until marked done).
+Also satisfies §6's standing per-occurrence completion-timestamp rule for free, since it was
+built with that field from the start.
+
+**Consequence for `Task`:** `EventOccurrence.status` and `EventOccurrence.allottedTimeRange`
+removed entirely — both were single-value fields trying to represent what's now correctly
+per-occurrence data on `TaskInstance`. `Task` stays the template/rule ("gym, 3x/week,
+prefers evenings"); `TaskInstance` is each concrete instance that rule produced
+("this week's Wednesday instance, 6–7pm, not yet done"). Verified no other code referenced
+the removed fields before deletion (`TaskCreationHelpers` only had a stale comment
+mentioning them, no live usage).
+
+**Repo:** `TaskInstanceRepo` (standard `JpaRepository<TaskInstance, UUID>`), plus
+`deleteAllByTask(Task task)` (Spring Data derived query) for the overwrite-on-regenerate step.
+
+### 2a.3 New service: `ScheduleGenerationService` — the orchestration layer
+Nothing previously called `placeAll` outside a dry-run sandbox. New class
+`Scheduler/Service/ScheduleGenerationService.java` — the "impure shell" around
+`SchedulerService`'s pure computation core (pure-core/imperative-shell split, deliberate):
+fetches the user's tasks (`TaskRepo`) and profile (`ProfileRepo`), calls
+`schedulerService.placeAll(...)`, then per task: `deleteAllByTask` (overwrite, not merge —
+see resolved open item below) + saves new `TaskInstance` rows from `placedSlots`. Wrapped in
+`@Transactional` (multi-task delete+insert must commit or roll back as one unit). Takes
+`LocalDateTime now` as a parameter rather than calling `LocalDateTime.now()` internally —
+standard clock-injection pattern, keeps the only real "now" call at the controller boundary
+and keeps this method testable with a fixed fake time later.
+
+Conversion of `TaskInstance` → API-facing shape lives in a separate static helper
+(`Task/Helper/ScheduleGeneratorHelperMethods.fromEntity`) — deliberately in the `Task`
+module, not `Scheduler`, since it's pure data-shaping with zero scheduling logic, reusable by
+any future consumer (e.g. Calendar's "what's today" query) independent of a generation run.
+
+### 2a.4 REST endpoints — Phase 2.3's open item, resolved
+- `TaskController` (`/tasks`) — full CRUD wired to the already-complete `TaskService`:
+  `POST /createTask`, `GET /getAllTasks`, `GET /{taskId}/getTask`, `PUT
+  /{taskId}/updateTask`, `DELETE /{taskId}/deleteTask`. All take
+  `@AuthenticationPrincipal User user` (works directly since `JwtFilter` puts the full `User`
+  entity as the security principal).
+- `ProfileController` (`/profile`) — `POST /create`, minimal but necessary: onboarding had no
+  way to create a `Profile` at all, which blocked testing `/schedule/generate` entirely
+  (`ScheduleGenerationService` throws if none exists). Known gap, not fixed: calling this
+  twice silently overwrites — fine for now, needs a real decision once onboarding UX exists.
+- `SchedulerController` (`/schedule`) — `POST /generate`, no request body (reads the
+  authenticated user's tasks server-side rather than accepting a client-supplied list —
+  the DB is the source of truth, not a second copy the client has to keep in sync). Response
+  is `Map<DayOfWeek, List<TaskInstanceResponseDTO>>` — grouped by day, not a flat list,
+  matching the Home Screen's day-first "today's timeline" requirement from
+  `PROJECT_CONTEXT.md` directly. Built via `Collectors.groupingBy(occurrenceDay,
+  Collectors.mapping(fromEntity, toList()))`.
+- **Resolves the REST endpoint contract open item below** (raw task list vs. `TaskRepo`: read
+  from `TaskRepo`, server-side, always) **and the save-semantics open item** (overwrite
+  wholesale on every regenerate — `deleteAllByTask` before inserting; merge semantics
+  explicitly deferred until mid-week rescheduling (§7) needs to distinguish "freshly
+  generated" from "already placed, don't touch").
+
+### 2a.5 Request validation added (Bean Validation, `jakarta.validation`)
+`CreateTaskDTO`/`RecurrenceDTO`/`TimeRangeDTO` now validated via `@Valid` +
+`jakarta.validation.constraints` (`@NotBlank`, `@NotNull`, `@Positive`, `@PositiveOrZero`),
+caught by a new handler in `GlobalExceptionHandler` for `MethodArgumentNotValidException` →
+clean `400` with field-level messages, instead of an unhandled 500.
+
+**Conditional-validation problem, hit and fixed three times over during testing — worth
+understanding as one pattern, not three separate bugs:** `RecurrenceDTO`'s fields depend on
+each other (`daysOfWeek` only matters if `weeklyMode = EXACT_DAYS`; `timesPerWeek` only if
+`COUNT_ONLY`; `weeklyMode` only matters at all if `recurrenceTypeEnum = WEEKLY`). A blanket
+`@NotNull` on all of them rejects legitimate requests (e.g. a `DAILY` task correctly omitting
+`weeklyMode` entirely). Fixed with three `@AssertTrue`-annotated methods on `RecurrenceDTO`,
+each checking one conditional relationship — the standard Bean Validation pattern for
+cross-field rules that a single field-level annotation can't express. All three fields
+dropped their unconditional `@NotNull` in favor of this.
+
+### 2a.6 Bugs found via actual Postman testing (not just review)
+See `ISSUES_LOG.md` for full detail (root cause, fix, verification status) on every bug
+found this session, including the ones surfaced here. Full narrative moved out of this file
+deliberately — `ROADMAP.md` stays forward-looking; `ISSUES_LOG.md` is the backward-looking
+bug record. As of 2026-08-28: all bugs found in this testing round are resolved except the
+blocked-`preferredTimeRange` search-width question, still open (see §10 and `ISSUES_LOG.md`).
+
+---
+
+## 2b. Bug Fixes for §2a.6 Issues — see `ISSUES_LOG.md`
+
+Full narrative (proposed fix, rationale, rejected alternatives, verification) for each of the
+three bugs surfaced in §2a.6 now lives entirely in `ISSUES_LOG.md`, not here — this section
+kept only as a status pointer so §5/§10 references still resolve to *something* in this file.
+
+- `pickSpreadDays` doesn't spread → **Resolved 2026-08-28.** See `ISSUES_LOG.md`.
+- `COUNT_ONLY` fallback-on-failure ("reserved days") → **Resolved**, implemented alongside
+  the above. See `ISSUES_LOG.md`.
+- `failedDays` never reaches the API response → **Resolved 2026-08-28.** See `ISSUES_LOG.md`.
+- Blocked-`preferredTimeRange` search-width fallback → **Still open**, two-phase search
+  proposed but not yet implemented. See `ISSUES_LOG.md` for the full design discussion
+  (including the rejected "just always search the full window" alternative).
 
 ---
 
@@ -592,6 +727,18 @@ enough — don't reach for it upfront.
 - [ ] Backtracking/CSP escalation trigger (§5 Phase 2 step 3) — deferred until multi-start
       greedy is built and tested; revisit only with concrete evidence of unfindable valid
       arrangements, not preemptively.
+- [x] `pickSpreadDays` doesn't actually spread (§2a.6) → **Resolved (2026-08-28):** fixed and
+      verified via Postman re-test, see §2b.1. Even-distribution formula
+      (`(i * availableDays.size()) / timesPerWeek`) replaces the old `i % size` clustering bug.
+- [x] `failedDays` never reaches the API response (§2a.6) → **Resolved (2026-08-28):** fixed
+      and verified via Postman re-test, see §2b.3. New `ScheduleGenerationResult`/
+      `ScheduleGenerationResponseDTO`/`FailedOccurrenceDTO` carry `failedDays` through to a
+      `failed` array in the `/schedule/generate` response, alongside the existing `schedule`.
+- [ ] Flexible-task search-width design question (§2a.6) — when a `FLEXIBLE` task's
+      `preferredTimeRange` is fully blocked by a competing task, the search currently just
+      fails that day rather than widening to the full wake-sleep window. `movability` doesn't
+      currently affect search width at all — only rescheduling resistance (§3.4b). Needs a
+      deliberate decision on whether/how flexibility should widen initial-placement search.
 - [ ] One general re-optimize function vs. specialized fast-path handlers per reschedule
       trigger type? (Revisit at Phase 2.4)
 - [ ] Grace period behavior for "passive drift" (task not started, not explicitly skipped)?

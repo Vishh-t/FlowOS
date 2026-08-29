@@ -41,16 +41,16 @@ public class GlobalExceptionHandler
         return new ResponseEntity<>(ex.getMessage(), HttpStatus.BAD_REQUEST);
     }
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<String> handleMethodArgumentNotValid(MethodArgumentNotValidException ex)
-    {
-        String errors = ex.getBindingResult()
-                .getFieldErrors()
-                .stream()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .collect(Collectors.joining(", "));
-        return new ResponseEntity<>(errors, HttpStatus.BAD_REQUEST);
-    }
+//    @ExceptionHandler(MethodArgumentNotValidException.class)
+//    public ResponseEntity<String> handleMethodArgumentNotValid(MethodArgumentNotValidException ex)
+//    {
+//        String errors = ex.getBindingResult()
+//                .getFieldErrors()
+//                .stream()
+//                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+//                .collect(Collectors.joining(", "));
+//        return new ResponseEntity<>(errors, HttpStatus.BAD_REQUEST);
+//    }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<String> handleGeneral(Exception ex)
