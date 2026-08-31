@@ -1,6 +1,7 @@
 package org.example.flowos.Scheduler.Service;
 
 import lombok.RequiredArgsConstructor;
+import org.example.flowos.Exceptions.NotFoundException;
 import org.example.flowos.Profile.Entity.Profile;
 import org.example.flowos.Profile.Repo.ProfileRepo;
 import org.example.flowos.Scheduler.Model.TimeAndDayRange;
@@ -38,7 +39,7 @@ public class ScheduleGenerationService
     {
         List<Task> tasks = taskRepo.findAllByUser(user);
         Profile profile = profileRepo.findById(user.getUserId())
-                .orElseThrow(() -> new IllegalStateException("No profile found for user " + user.getUserId()));
+                .orElseThrow(() -> new NotFoundException("No profile found for this user. Please complete onboarding first."));
 
         Map<Task, PlacementResult> placements = schedulerService.placeAll(tasks, profile, now);
 

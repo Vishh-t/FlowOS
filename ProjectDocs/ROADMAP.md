@@ -4,7 +4,23 @@
 > should read this file before making architectural suggestions. Update it as decisions
 > are made — don't let decisions live only inside a chat transcript.
 
-Last updated: 2026-08-27
+Last updated: 2026-08-30
+
+---
+
+## Document Map — three files, three distinct jobs
+
+FlowOS's persistent context lives across three files in `ProjectDocs/`. Any session (this
+one or a future one, any agent) should know which one to read for which question, and which
+one to update after doing real work — mixing these up is how context quietly gets lost.
+
+| File | Direction | Answers | Update when |
+|---|---|---|---|
+| **`PROJECT_CONTEXT.md`** | Stable, rarely touched | "What is FlowOS *for*, originally, and why?" — vision, target audience, original module/screen list, product philosophy. | Almost never — not rewritten per schema decision or bug fix. If the *vision itself* genuinely changes, not just an implementation detail. |
+| **`ROADMAP.md`** (this file) | Forward-looking | "What's the current architecture, what's actually built vs. not, what's the plan, what decisions were made and why?" Source of truth for data model, module boundaries, build order, open design questions. | After any real architectural decision, a phase completes, or a `§10` open item gets resolved. Not for routine bug fixes — those go in `ISSUES_LOG.md`, cross-referenced from here. |
+| **`ISSUES_LOG.md`** | Backward-looking | "What broke, why, how was it actually fixed, and was that fix actually verified?" One entry per bug: root cause → fix → verification status. Also holds parked `[SUGGESTION]` ideas not yet promoted into roadmap scope. | Every time something breaks and gets fixed, or a real design gap surfaces during testing — even if the eventual answer is "false alarm, not a bug" (worth recording the wrong turn too, not just deleting it). |
+
+**The short version:** `PROJECT_CONTEXT.md` = why this exists. `ROADMAP.md` = where it stands and where it's going. `ISSUES_LOG.md` = what went wrong along the way and how it got resolved. A decision belongs in exactly one of these — if it's tempting to put the same paragraph in two of them, that's usually a sign it belongs in one with a cross-reference from the other, not duplicated.
 
 ---
 
@@ -232,8 +248,10 @@ dropped their unconditional `@NotNull` in favor of this.
 See `ISSUES_LOG.md` for full detail (root cause, fix, verification status) on every bug
 found this session, including the ones surfaced here. Full narrative moved out of this file
 deliberately — `ROADMAP.md` stays forward-looking; `ISSUES_LOG.md` is the backward-looking
-bug record. As of 2026-08-28: all bugs found in this testing round are resolved except the
-blocked-`preferredTimeRange` search-width question, still open (see §10 and `ISSUES_LOG.md`).
+bug record. **As of 2026-08-30: every bug found across both testing rounds (2026-08-27–28
+and 2026-08-30) is resolved** — including the blocked-`preferredTimeRange` search-width
+question, closed out 2026-08-30 (two-phase search + search-step fix, see `ISSUES_LOG.md` and
+§10). Zero `[OPEN]` bugs remain in `ISSUES_LOG.md` as of this update.
 
 ---
 
@@ -250,6 +268,59 @@ kept only as a status pointer so §5/§10 references still resolve to *something
 - Blocked-`preferredTimeRange` search-width fallback → **Still open**, two-phase search
   proposed but not yet implemented. See `ISSUES_LOG.md` for the full design discussion
   (including the rejected "just always search the full window" alternative).
+
+---
+
+## 2c. Known Scheduler Limitations — compiled 2026-08-30, full list, prioritized
+
+Compiled after real Postman testing exposed how much of this is still "a first-fit slice,"
+not a scheduler. Ordered by dependency, not just severity — several of these block each
+other.
+
+**Root cause underneath most of the rest:** `WeeklyTimeline` has no real calendar concept —
+one abstract recurring week, no dates, no "this week vs. next," no "today." This single gap
+is *why* the "now" and multi-week items below exist, and why incremental placement and
+rescheduling can't be built cleanly on the current model — either would need rebuilding the
+moment real dates land if built first.
+
+**Decision: real-dates work happens BEFORE rescheduling (Phase 2 step 4), not after.**
+Rescheduling is fundamentally "re-place things given what's real and what's already
+happened" — that requires knowing what day it actually is. Building it on the current
+abstract week means rebuilding it once dates exist. Inserted as a new step below.
+
+1. **No real calendar / date anchoring.** `WeeklyTimeline` is abstract, not tied to actual
+   dates. Root cause of #2, #3, #6 below.
+2. **No "now" lower bound.** Only deadlines (upper bound) are enforced in
+   `generateCandidate` — nothing stops a candidate being placed in the past. Already tracked
+   as `[OPEN]` in `ISSUES_LOG.md` ("Minor, flagged but not yet fixed"); root cause is #1.
+3. **No multi-week horizon.** "Due in 3 weeks" isn't representable — a far-out deadline gets
+   clamped to avoid aliasing onto the wrong day within one week (see §2, `generateCandidate`
+   description), not genuinely scheduled across weeks. Root cause is #1.
+4. **No incremental placement.** Adding one new task means regenerating and overwriting the
+   *entire* week for every task (`ScheduleGenerationService.generateSchedule` always fetches
+   *all* tasks, `deleteAllByTask` + reinsert per task). No "just place this one against what
+   already exists." Depends on #1 — "what already exists, this week" isn't a well-defined
+   question yet.
+5. **Regeneration is destructively wholesale, not isolated.** Direct consequence of #4:
+   regenerating to add one task silently wipes `TaskInstance.status`/`timeOfCompletion` on
+   *every* other task too — a completed Monday gym session reverts to `PENDING` the moment
+   any unrelated task gets added. Real data-loss risk the moment completion tracking (§6) is
+   actually in use, not just a performance nitpick. Same root fix as #4.
+6. **`ONE_OFF` recurrence unsupported.** A single, non-recurring, date-specific task can't be
+   placed — `RecurrenceInterpreters` doesn't handle it. Needs #1 (a real date to anchor to)
+   to make sense at all; not fixable in isolation.
+7. **No rescheduling engine at all** (§7, Phase 2 step 4). "Overslept," "finished early,"
+   "skipped it" — none of it exists; every schedule is generated from scratch. Blocked on #1
+   per the decision above.
+8. **First-fit, not best-fit.** `generateCandidate` takes the first workable slot, never
+   compares candidates. Already tracked as Phase 2 step 3 (multi-start greedy + scoring, §5)
+   — genuinely independent of the calendar work above, could be built in any order relative
+   to it, but pairs naturally with rescheduling once that exists (more to score against).
+
+**Revised Phase 2 ordering (supersedes the plain 1→4 list in §5):** naive placement (done)
+→ **real-dates/calendar-anchored timeline (new, blocks 2/3/4/5/6)** → incremental placement
++ `ONE_OFF` support → rescheduling engine → scoring (can interleave with the above, no hard
+dependency).
 
 ---
 
@@ -505,17 +576,11 @@ exists, and that's not blocking Phase 2. Just get entities + repos compiling and
    confirmed through discussion it governs *resistance to being moved during rescheduling*,
    not initial-placement flexibility, so it's correctly unused until this phase.
 
-### Phase 2.3 — Make the scheduler reachable (plumbing, before more algorithm work)
-Realized during review: nothing outside a dry-run test can currently invoke `placeAll` —
-this is the actual next concrete action, ahead of scoring/multi-start work, since it's what
-turns tested-but-inert logic into something a frontend or API client can use.
-1. **REST endpoint(s)** — e.g. `POST /schedule/generate`, taking a task list (or reading via
-   `TaskRepo` for the logged-in user) + `Profile`, returning the `Map<Task, PlacementResult>`
-   (or a DTO projection of it).
-2. **Persist the result** — currently `placeAll` computes placements in memory only; nothing
-   writes back to `EventOccurrence.allottedTimeRange` or saves via `TaskRepo`. Needs a
-   decision on save semantics (e.g. does regenerating overwrite prior placements wholesale,
-   or merge?) — open, see §10.
+### Phase 2.3 — Make the scheduler reachable (plumbing, before more algorithm work) — ✅ DONE (2026-08-30)
+Realized during review: nothing outside a dry-run test could invoke `placeAll`. Now fully
+built *and* tested — see §2a.4 for what was built, and `ISSUES_LOG.md`'s "API layer —
+endpoint verification (2026-08-30, second pass)" section for the full CRUD/ownership/
+edge-case testing pass that confirmed it actually works, not just compiles.
 
 ### Phase 3 — Consumers of the scheduler's output
 - `Calendar` (today view, week view)
@@ -717,13 +782,15 @@ enough — don't reach for it upfront.
       `placeAll` together cover both "naive placement" and "constraint validation" as
       originally scoped as two separate steps — no redraw needed, the code just ended up
       doing both in one integrated slice. See §2 and §5 Phase 2 step 1.
-- [ ] REST endpoint contract for `placeAll` (§5 Phase 2.3) — request/response shape not yet
-      decided (raw task list vs. reading from `TaskRepo`; full `PlacementResult` map vs. a
-      simplified DTO).
-- [ ] Save semantics for placement results (§5 Phase 2.3) — does regenerating a week
-      overwrite prior `allottedTimeRange` values wholesale, or merge/preserve unaffected
-      tasks? Matters once rescheduling (§7) needs to distinguish "freshly generated" from
-      "already placed, don't touch."
+- [x] REST endpoint contract for `placeAll` (§5 Phase 2.3) → **Resolved (2026-08-27):**
+      reads from `TaskRepo`/`ProfileRepo` server-side for the authenticated user, never a
+      client-supplied task list — see §2a.4. Response is a typed
+      `ScheduleGenerationResponseDTO` (`schedule` + `failed`), not a raw `PlacementResult`
+      map.
+- [x] Save semantics for placement results (§5 Phase 2.3) → **Resolved (2026-08-27):**
+      overwrite wholesale on every regenerate (`deleteAllByTask` before inserting) — see
+      §2a.4. Merge/preserve semantics explicitly deferred until mid-week rescheduling (§7)
+      needs to distinguish "freshly generated" from "already placed, don't touch."
 - [ ] Backtracking/CSP escalation trigger (§5 Phase 2 step 3) — deferred until multi-start
       greedy is built and tested; revisit only with concrete evidence of unfindable valid
       arrangements, not preemptively.
@@ -734,11 +801,13 @@ enough — don't reach for it upfront.
       and verified via Postman re-test, see §2b.3. New `ScheduleGenerationResult`/
       `ScheduleGenerationResponseDTO`/`FailedOccurrenceDTO` carry `failedDays` through to a
       `failed` array in the `/schedule/generate` response, alongside the existing `schedule`.
-- [ ] Flexible-task search-width design question (§2a.6) — when a `FLEXIBLE` task's
-      `preferredTimeRange` is fully blocked by a competing task, the search currently just
-      fails that day rather than widening to the full wake-sleep window. `movability` doesn't
-      currently affect search width at all — only rescheduling resistance (§3.4b). Needs a
-      deliberate decision on whether/how flexibility should widen initial-placement search.
+- [x] Flexible-task search-width design question (§2a.6) → **Resolved (2026-08-30):**
+      two-phase search implemented in `SchedulerService.generateCandidate`/`attemptSearch` —
+      tries `preferredTimeRange` first, falls back to the full wake-sleep window only if that
+      returns empty. Verified via Postman re-test (DSA now places on all 7 days). Also fixed
+      alongside it: fixed 10-minute search step could skip a genuinely valid boundary slot —
+      changed to 1-minute steps. Full detail, rejected alternatives, and the
+      closest-fit-fallback idea spun out of this fix all live in `ISSUES_LOG.md`.
 - [ ] One general re-optimize function vs. specialized fast-path handlers per reschedule
       trigger type? (Revisit at Phase 2.4)
 - [ ] Grace period behavior for "passive drift" (task not started, not explicitly skipped)?

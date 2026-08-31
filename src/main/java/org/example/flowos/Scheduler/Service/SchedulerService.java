@@ -13,6 +13,7 @@ import org.example.flowos.Scheduler.DTOs.GetCandidateResultDTO;
 import org.example.flowos.Scheduler.Model.WeeklyTimeline;
 import org.example.flowos.Scheduler.Record.PlacementResult;
 import org.example.flowos.Task.Embedables.Recurrence;
+import org.example.flowos.Task.Embedables.TaskTimeRange;
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Enums.CommuteApplicationEnum;
 import org.example.flowos.Task.Enums.RecurrenceTypeEnum;
@@ -34,7 +35,24 @@ public class SchedulerService
 {
     Optional<CandidateResult> generateCandidate(GenerateCandidateDTO dto)
     {
-        int incrementalStep = 10;
+        TaskTimeRange preferred = dto.getTask().getEvent().getPreferredTimeRange();
+
+        if (preferred != null)
+        {
+            Optional<CandidateResult> preferredResult = attemptSearch(dto, preferred.getTaskStartTime(), preferred.getTaskEndTime());
+            if (preferredResult.isPresent())
+            {
+                return preferredResult;
+            }
+            return attemptSearch(dto, dto.getUserProfile().getWakeTime(), dto.getUserProfile().getSleepTime());
+        }
+
+        return attemptSearch(dto, dto.getUserProfile().getWakeTime(), dto.getUserProfile().getSleepTime());
+    }
+
+    private Optional<CandidateResult> attemptSearch(GenerateCandidateDTO dto, LocalTime baseStart, LocalTime baseLatest)
+    {
+        int incrementalStep = 1;
 
         int taskDurationInMinutes = dto.getTask().getEvent().getTime().getTaskDurationInMinutes();
 
@@ -64,20 +82,6 @@ public class SchedulerService
         Recurrence taskRecurrence = dto.getTask().getEvent().getTaskRecurrence();
         Set<DayOfWeek> excludedDaysOfWeek = taskRecurrence.getExcludedDaysOfWeek();
 
-        LocalTime baseStart;
-        LocalTime baseLatest;
-
-        if (dto.getTask().getEvent().getPreferredTimeRange() != null)
-        {
-            baseStart = dto.getTask().getEvent().getPreferredTimeRange().getTaskStartTime();
-            baseLatest = dto.getTask().getEvent().getPreferredTimeRange().getTaskEndTime();
-        } else
-        {
-            baseStart = dto.getUserProfile().getWakeTime();
-            baseLatest = dto.getUserProfile().getSleepTime();
-        }
-
-
         boolean latestCrossesMidnight = baseLatest.isBefore(baseStart);
 
         ShiftedTime shiftedStart = shift(baseStart, prePaddingMinutes);
@@ -90,8 +94,7 @@ public class SchedulerService
 
         GetCandidateResultDTO resultDto = generateGetCandidateResultDTO(dto, excludedDaysOfWeek, taskRecurrence, isBothWay, isAfterTask, isBeforeTask, startTime, latestStartTime, bufferTimeInMinutes, startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep, durationToleranceMinutes, commuteTimeInMinutes);
 
-        return getCandidateResult(resultDto
-        );
+        return getCandidateResult(resultDto);
     }
 
     private static GetCandidateResultDTO generateGetCandidateResultDTO(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek, Recurrence taskRecurrence, boolean isBothWay, boolean isAfterTask, boolean isBeforeTask, LocalTime startTime, LocalTime latestStartTime, int bufferTimeInMinutes, int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep, int durationToleranceMinutes, int commuteTimeInMinutes)
