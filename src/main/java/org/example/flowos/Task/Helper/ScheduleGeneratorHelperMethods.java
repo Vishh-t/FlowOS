@@ -11,6 +11,7 @@ public class ScheduleGeneratorHelperMethods
     {
         return new TaskInstanceResponseDTO(
                 instance.getTask().getTaskName(),
+                instance.getOccurrenceDate(),
                 instance.getTime().getTaskStartTime(),
                 instance.getTime().getTaskEndTime(),
                 instance.getStatus()

@@ -36,7 +36,7 @@ public class SchedulerController
 
         Map<DayOfWeek, List<TaskInstanceResponseDTO>> grouped = result.placedInstances().stream()
                 .collect(Collectors.groupingBy(
-                        TaskInstance::getOccurrenceDay,
+                        instance -> instance.getOccurrenceDate().getDayOfWeek(),
                         Collectors.mapping(ScheduleGeneratorHelperMethods::fromEntity, Collectors.toList())
                 ));
 
@@ -52,7 +52,7 @@ public class SchedulerController
 
         Map<DayOfWeek, List<TaskInstanceResponseDTO>> grouped = instances.stream()
                 .collect(Collectors.groupingBy(
-                        TaskInstance::getOccurrenceDay,
+                        instance -> instance.getOccurrenceDate().getDayOfWeek(),
                         Collectors.mapping(ScheduleGeneratorHelperMethods::fromEntity, Collectors.toList())
                 ));
 

@@ -290,8 +290,13 @@ Rescheduling is fundamentally "re-place things given what's real and what's alre
 happened" — that requires knowing what day it actually is. Building it on the current
 abstract week means rebuilding it once dates exist. Inserted as a new step below.
 
-1. **No real calendar / date anchoring.** `WeeklyTimeline` is abstract, not tied to actual
-   dates. Root cause of #2, #3, #6 below.
+1. **No real calendar / date anchoring.** ~~`WeeklyTimeline` is abstract, not tied to actual
+   dates.~~ **Resolved (2026-09-06)** — `TaskInstance` now carries a real `occurrenceDate`
+   (`LocalDate`), computed via a per-generation-run anchor Monday + a stale-date rollover
+   fix. See `ISSUES_LOG.md` for full detail. `WeeklyTimeline`/`generateCandidate`/
+   `TimeAndDayRange` remain entirely `DayOfWeek`-based by design — only the persisted
+   `TaskInstance` result gets a real date. This unblocks #2/#3/#6 below but doesn't itself
+   implement them.
 2. **No "now" lower bound.** Only deadlines (upper bound) are enforced in
    `generateCandidate` — nothing stops a candidate being placed in the past. Already tracked
    as `[OPEN]` in `ISSUES_LOG.md` ("Minor, flagged but not yet fixed"); root cause is #1.
@@ -303,11 +308,16 @@ abstract week means rebuilding it once dates exist. Inserted as a new step below
    *all* tasks, `deleteAllByTask` + reinsert per task). No "just place this one against what
    already exists." Depends on #1 — "what already exists, this week" isn't a well-defined
    question yet.
-5. **Regeneration is destructively wholesale, not isolated.** Direct consequence of #4:
-   regenerating to add one task silently wipes `TaskInstance.status`/`timeOfCompletion` on
-   *every* other task too — a completed Monday gym session reverts to `PENDING` the moment
-   any unrelated task gets added. Real data-loss risk the moment completion tracking (§6) is
-   actually in use, not just a performance nitpick. Same root fix as #4.
+   **Decision (2026-09-06): not a standalone step.** Genuinely re-placing some things against
+   what's already placed, without touching the rest, is exactly what the rescheduling engine
+   (#7 below) needs to do anyway — incremental placement gets built *as part of* that work,
+   triggered by a reschedule event, rather than as its own earlier step. No meaningful user
+   data exists before the app is feature-complete, so the wholesale-wipe risk this item
+   originally flagged isn't a real cost during development — no need to rush a standalone fix.
+5. **Regeneration is destructively wholesale, not isolated.** Direct consequence of #4 — same
+   resolution: folded into the rescheduling engine (#7), not built standalone. During active
+   development with no real user data at stake, wholesale regeneration is an inconvenience,
+   not a data-loss risk.
 6. **`ONE_OFF` recurrence unsupported.** A single, non-recurring, date-specific task can't be
    placed — `RecurrenceInterpreters` doesn't handle it. Needs #1 (a real date to anchor to)
    to make sense at all; not fixable in isolation.
@@ -319,23 +329,31 @@ abstract week means rebuilding it once dates exist. Inserted as a new step below
    — genuinely independent of the calendar work above, could be built in any order relative
    to it, but pairs naturally with rescheduling once that exists (more to score against).
 
-**Revised Phase 2 ordering (supersedes the plain 1→4 list in §5):** naive placement (done)
-→ **real-dates/calendar-anchored timeline (new, blocks 2/3/4/5/6)** → incremental placement
-+ `ONE_OFF` support → rescheduling engine → scoring (can interleave with the above, no hard
-dependency).
+**Revised Phase 2 ordering, updated 2026-09-06 (supersedes the plain 1→4 list in §5):**
+naive placement (done) → real-dates/calendar-anchored timeline (**done, 2026-09-06**) →
+**multi-week generation horizon** (next up — loop the existing per-week anchor-date logic
+across N weeks; rework the current single-week deadline clamp so far-out deadlines genuinely
+land in a later week instead of being forced into week one) → **`ONE_OFF` recurrence support**
+(needs a real target date on `Task`/`Recurrence` — see §10 open decision) → **multi-candidate
+scoring** (§5 Phase 2 step 3) → **rescheduling engine, incremental placement built as part of
+this step** (not before it — see #4/#5 above).
 
-> 🔵 **FRONTEND PLUG-IN POINT (decided 2026-09-05):** build the first real frontend piece
-> (Calendar / week-view screen, per §4 module ownership and §5 Phase 3) right here — as soon
-> as `GET /schedule` returns real-date-anchored `TaskInstance` data, before incremental
-> placement starts. Reasoning: (1) this is the earliest point the response shape is stable —
-> building against it any earlier means reworking the frontend when dates land; waiting
-> longer delays value for no reason. (2) Everything after this point — incremental placement,
-> then rescheduling — is fundamentally "does this visually overlap / did this silently
-> disappear on regenerate" correctness work, exactly the class of bug this log shows is hard
-> to catch via Postman/JSON (week-boundary overlap bug, `pickSpreadDays` clustering,
-> padding-boundary confusion) and trivial to catch on a rendered week grid. Not scaffolding —
-> this is the real Calendar module from §4/§5 Phase 3, just sequenced earlier than "after
-> everything else."
+**Milestone marker:** once multi-week horizon + `ONE_OFF` support are both done, that's
+genuinely "a basic scheduler that can produce a whole multi-week timetable" — the natural
+checkpoint before scoring work starts.
+
+> 🔵 **FRONTEND PLUG-IN POINT (decided 2026-09-05, condition met 2026-09-06):** build the first
+> real frontend piece (Calendar / week-view screen, per §4 module ownership and §5 Phase 3)
+> right here. `GET /schedule` now returns real-date-anchored `TaskInstance` data (see §2c #1
+> and `ISSUES_LOG.md`) — the trigger condition for this callout is satisfied, this is now
+> actionable, not just planned. Reasoning: (1) this is the earliest point the response shape is
+> stable — building against it any earlier means reworking the frontend when dates land; that
+> risk is now behind us. (2) Everything after this point — incremental placement, then
+> rescheduling — is fundamentally "does this visually overlap / did this silently disappear on
+> regenerate" correctness work, exactly the class of bug this log shows is hard to catch via
+> Postman/JSON (week-boundary overlap bug, `pickSpreadDays` clustering, padding-boundary
+> confusion) and trivial to catch on a rendered week grid. Not scaffolding — this is the real
+> Calendar module from §4/§5 Phase 3, just sequenced earlier than "after everything else."
 
 ---
 
@@ -789,6 +807,17 @@ enough — don't reach for it upfront.
 
 ## 10. Open Decisions Log
 
+- [ ] `ONE_OFF` recurrence target-date design (§2c #6, next up after multi-week horizon) —
+      does `Task`/`Recurrence` grow an optional real anchor date, resolved against the
+      generation run's date at placement time? Or is it resolved some other way? Not yet
+      designed — revisit when multi-week horizon work starts, since `ONE_OFF` support is
+      next in the §2c ordering right after it.
+- [x] Incremental placement (§2c #4/#5) as a standalone pre-rescheduling step? → **Resolved
+      (2026-09-06): folded into the rescheduling engine (§2c #7), not built standalone.**
+      Incremental placement is what rescheduling *is* (re-place some things against what's
+      already placed, without touching the rest) — no reason to build it twice. The
+      wholesale-regeneration data-loss risk this was originally meant to prevent isn't a real
+      cost yet since no meaningful user data exists before the app is feature-complete.
 - [ ] Adherence-aware scoring (§6b) — data model for surfacing "realistic-goal correction"
       suggestions to the user not yet designed; revisit once Phase 2 scoring (§5 Phase 2
       step 3) is reached.

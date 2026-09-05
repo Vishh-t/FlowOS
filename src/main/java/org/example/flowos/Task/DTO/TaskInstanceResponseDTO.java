@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.example.flowos.Task.Enums.TaskStatusEnum;
 
+import java.time.LocalDate;
 import java.time.LocalTime;
 
 @Data
@@ -13,6 +14,8 @@ import java.time.LocalTime;
 public class TaskInstanceResponseDTO
 {
     String taskName;
+
+    LocalDate occurrenceDate;
 
     LocalTime startTime;
 
