@@ -53,6 +53,8 @@ public class JwtFilter extends OncePerRequestFilter
         } catch (NotFoundException ex)
         {
             log.warn("JWT referenced a deleted/missing user: {}", ex.getMessage());
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User no longer exists");
+            return;
         } catch (Exception ex)
         {
             log.debug("JWT validation failed: {}", ex.getMessage());

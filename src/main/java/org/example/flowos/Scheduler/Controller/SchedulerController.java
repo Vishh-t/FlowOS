@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.DayOfWeek;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -33,9 +32,7 @@ public class SchedulerController
     @PostMapping("/generate")
     public ResponseEntity<?> generateSchedule(@AuthenticationPrincipal User user)
     {
-        LocalDateTime now = LocalDateTime.now();
-
-        ScheduleGenerationResult result = scheduleGenerationService.generateSchedule(user, now);
+        ScheduleGenerationResult result = scheduleGenerationService.generateSchedule(user);
 
         Map<DayOfWeek, List<TaskInstanceResponseDTO>> grouped = result.placedInstances().stream()
                 .collect(Collectors.groupingBy(

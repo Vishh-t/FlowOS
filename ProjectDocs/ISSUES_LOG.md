@@ -5,12 +5,11 @@
 > open design decisions) — this file is backward-looking (concrete bugs found, root cause,
 > fix, verification). If a bug is still open, it's logged here too, with `[OPEN]`.
 
-Last updated: 2026-09-05 (second verification pass — confirmed 2 more previously-OPEN
-issues fixed against live code: `GET /schedule` read-only endpoint added, and `logIn`'s
-timing side-channel closed via a constant-time dummy-hash comparison. Checked every other
-remaining [OPEN] entry against current source in the same pass — none of the rest have
-changed; the `TimeAndDayRange.overlaps()` week-boundary bug is still live and still
-CRITICAL.)
+Last updated: 2026-09-06 — `TimeAndDayRange.overlaps()` week-boundary bug fixed directly and
+dry-run verified (see entry below); zero `[OPEN]` entries remain in the backlog. The one
+remaining architectural gap (`WeeklyTimeline` "which week" concept) is marked `[DEFERRED]`,
+resolved by design once real-dates/calendar-anchoring lands per `ROADMAP.md` §2c, rather than
+patched standalone.
 
 ---
 
@@ -39,7 +38,7 @@ CRITICAL.)
 > controller/service/helper/entity/DTO, done specifically to catch issues *before* building
 > the rescheduler on top of this foundation — not reactive bug-chasing during a feature build.
 
-### [OPEN — CRITICAL] `TimeAndDayRange.overlaps()` breaks across the Sunday→Monday week boundary
+### [RESOLVED] `TimeAndDayRange.overlaps()` breaks across the Sunday→Monday week boundary
 - **What's broken:** `toMinutesSinceMonday` maps each day onto a **linear, non-wrapping**
   number line (`(day.getValue() - 1) * 1440 + minutes`; Monday = 0, Sunday ≈ 8640+). But
   `DayOfWeek.plus()` — used everywhere a candidate's end day is derived (e.g.
@@ -63,10 +62,31 @@ CRITICAL.)
   Building the rescheduler on top of a silently-broken overlap check means the bug
   propagates into reschedule logic too, and gets harder to isolate the more sits on top of
   it — this is why it's flagged as the top-priority item before that work starts.
-- **Not yet fixed** — needs a design decision on the right representation (e.g. a genuinely
-  linear "minutes since an anchor point, extending past 10080 for wraparound cases" instead
-  of a cyclic `DayOfWeek`-based one, or explicitly detecting and special-casing the wrap).
-- **Status:** flagged, not yet fixed or tested against a live Postman repro.
+- **Fix applied directly (2026-09-06), Option A from design discussion — extend the linear
+  numbering past the week boundary instead of switching representations entirely:**
+  1. New private `startMinutes()` — just `toMinutesSinceMonday(startDay, startTime)`, extracted
+     so it isn't recomputed inline everywhere.
+  2. New private `endMinutesNormalized()` — computes the raw end-minute value, and if it comes
+     out `<=` the range's own start (the signal that `DayOfWeek.plus()` wrapped past Sunday),
+     adds one full week's worth of minutes (`MINUTES_PER_WEEK = 10080`) so the end value keeps
+     climbing past the nominal 0..10079 bound instead of resetting near zero.
+  3. `overlaps()` rewritten to use these normalized values, but a normalized end past 10080
+     alone isn't sufficient — the *other* range also needs checking at three positions (shifted
+     `-10080`, `0`, `+10080`) since the week is a repeating cycle, not a single line; one of
+     those three shifts will always line up correctly regardless of which range (if either)
+     wrapped the boundary.
+  4. `comparePoints`/`toMinutesSinceMonday` (used by `compareTo` and elsewhere) left completely
+     untouched — this fix is fully contained inside `overlaps()` plus two small new private
+     helpers, no other call site or method signature changed.
+- **Verified:** dry-run sandbox (Python port of the exact algorithm, not guessed) covering: (a)
+  the original documented false-negative repro from this entry — occupied `SUNDAY 23:00 →
+  MONDAY 00:30` vs. new `MONDAY 00:00 → MONDAY 00:15`, now correctly returns `true`; (b) the
+  same non-wrapping same-priority/no-overlap and CRITICAL-vs-LOW cases already covered by the
+  Scheduler-core dry runs above, confirmed unchanged; (c) a true negative — two ranges on
+  opposite sides of the week with no wraparound involved, confirmed still `false`. Not yet
+  re-tested via a live Postman night-owl-profile repro — worth doing once a real profile with a
+  post-midnight sleep window is available to generate against.
+- **Status:** fixed and dry-run verified; live Postman verification still owed.
 
 ### [RESOLVED] `GlobalExceptionHandler`'s live validation-error handler returns an unhelpful raw message
 - **What was broken:** the active `MethodArgumentNotValidException` handler just returned
@@ -88,12 +108,33 @@ CRITICAL.)
 - **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
   Postman.
 
-### [OPEN, functional gap not a defect] `ONE_OFF` tasks can only ever be placed "today"
-- **What's happening:** `resolveTargetDays`'s `ONE_OFF` branch always uses
-  `now.getDayOfWeek()` as the only target day — there's no way to say "place this one-off
-  task next Tuesday." Not a code defect, a scoping gap — worth a deliberate decision, not
-  urgent.
-- **Status:** flagged for a future decision.
+### [RESOLVED] `ONE_OFF` tasks could only ever be placed "today"
+- **What was broken:** `resolveTargetDays`'s `ONE_OFF` branch always used
+  `now.getDayOfWeek()` as the only target day — no way to say "place this one-off task next
+  Tuesday."
+- **Fix confirmed via direct code read, three propagation points:**
+  1. `Recurrence.oneOffDay` (`DayOfWeek`) added to the entity.
+  2. `RecurrenceDTO` now carries `oneOffDay`, with a new `@AssertTrue`
+     (`isOneOffValid`) requiring it non-null when `recurrenceTypeEnum == ONE_OFF` — same
+     conditional-validation pattern as the existing `daysOfWeek`/`timesPerWeek`/`weeklyMode`
+     checks.
+  3. `TaskCreationHelpers.applyDTOToTaskAndEvent` now copies
+     `recurrence.setOneOffDay(dto.getRecurrence().getOneOffDay())` onto the entity.
+  4. `RecurrenceInterpreters.resolveTargetDays`'s `ONE_OFF` branch now reads
+     `recurrence.getOneOffDay()`, falling back to `now.getDayOfWeek()` only if null (belt-
+     and-suspenders default, since the DTO validation should already guarantee non-null on
+     any request that reaches this code) — still correctly filtered against
+     `excludedDaysOfWeek` either way.
+- **Known remaining gap, not yet addressed — flagged as a follow-up, not re-opening this
+  entry:** no check exists anywhere for `oneOffDay` naming a day *earlier in the week* than
+  `now.getDayOfWeek()` (e.g. requesting Monday when today is Wednesday). `attemptSearch`'s
+  "don't place before now" clamp only fires when `targetDay == now.getDayOfWeek()`, so an
+  earlier-in-week `oneOffDay` wouldn't be clamped and could search a day that's already
+  passed within this generation pass's linear week — compounded by `WeeklyTimeline` having
+  no multi-week concept (see that entry below), so there's no clean "roll to next week"
+  target either. Worth a deliberate decision (reject at DTO validation vs. accept as a
+  documented scoping gap) before this is fully closed out.
+- **Verified:** confirmed in code (2026-09-05); not independently re-tested via Postman.
 
 ### [RESOLVED] N+1 delete pattern in `ScheduleGenerationService`
 - **What was broken:** `taskInstanceRepo.deleteAllByTask(task)` was called once per task
@@ -140,19 +181,21 @@ exceptions — previously unreviewed in this depth
 - **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
   Postman.
 
-### [OPEN — security] `signInWithGoogle` silently links accounts by email match alone
-- **What's happening:** when a Google sign-in's email matches an existing `LOCAL` account,
-  `AuthService.signInWithGoogle` does `user.setGoogleId(googleId); repo.save(user);` —
-  linking the two accounts with no additional verification (no requirement that the user
-  already be logged in as the LOCAL account, no confirmation step).
-- **Why it matters:** this is a documented OAuth account-linking anti-pattern. If email
-  ownership isn't independently guaranteed to be verified on both sides, matching by email
-  alone risks account takeover — whoever controls a Google account with a given email
-  gets silently merged into whatever LOCAL account already used that email.
-- **Not yet fixed** — needs a decision: require the user to be already authenticated as the
-  LOCAL account to link (explicit "link my Google account" flow instead of implicit
-  merge-on-login), or otherwise verify email ownership before linking.
-- **Status:** flagged, not yet fixed.
+### [DECIDED — accepted pattern, not an issue] `signInWithGoogle` links accounts by email match
+- **Original framing (now corrected):** this was logged as an OPEN security anti-pattern.
+  On review, auto-linking a Google sign-in to an existing `LOCAL` account by matching email
+  is a standard, widely-used pattern (Auth0, Firebase, and Google's own guidance all treat
+  this as normal UX) — not inherently unsafe, provided the email is actually verified.
+  Decision: keep the silent-link behavior, don't build a separate confirmation/linking flow.
+- **One genuine gap fixed alongside this decision:** `signInWithGoogle` read
+  `payload.getEmail()` but never checked `payload.getEmailVerified()` — the ID token claim
+  that's the entire reason email-based auto-linking is safe in the first place. Added:
+  `if (email == null || !Boolean.TRUE.equals(payload.getEmailVerified())) { throw new
+  InvalidCredentialsException("Google account email is not verified"); }`, right after
+  extracting the payload fields, before any `repo.findByGoogleId`/`findByEmailId` lookup —
+  applies to both the existing-account-link path and brand-new-account creation.
+- **Verified:** applied directly (2026-09-05); not yet re-tested via Postman (would need a
+  Google test account/token with `email_verified: false` to exercise the rejection path).
 
 ### [RESOLVED] `logIn` had a timing side-channel that could leak whether an email is registered
 - **What was broken:** `AuthService.logIn` checked `storedUser == null` and threw
@@ -188,16 +231,11 @@ exceptions — previously unreviewed in this depth
 - **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
   Postman.
 
-### [OPEN, design note] Refresh tokens are never rotated
-- **What's happening:** `RefreshTokenService`/`AuthService.refresh` mints a new *access*
-  token on each call but reuses the same refresh token for its full 7-day Redis TTL — no
-  rotation, no invalidation of the old token when a new access token is issued.
-- **Why it's worth knowing, not necessarily "wrong":** non-rotating refresh tokens are a
-  common, simpler pattern and not inherently broken — but it means a stolen refresh token
-  stays valid for its entire lifetime with no reuse-detection signal (rotating refresh
-  tokens let you detect "this token was already used once" as a compromise indicator).
-  Worth a deliberate decision, not an oversight to silently fix.
-- **Status:** flagged as a design point to revisit, not an active bug.
+### [DECIDED — not needed at this scale, moved to Suggestions] Refresh tokens are never rotated
+- **Decision (2026-09-05):** rotation isn't necessary for a solo/student-scale project.
+  Moved to the Suggestions section below as a parked idea rather than an open concern — see
+  "Refresh token rotation" there for the reasoning and what it would take if this ever gets
+  revisited.
 
 ### [RESOLVED] Enum converters' `fromCode` throws an unhandled `IllegalArgumentException` on unknown codes
 - **What was broken:** all 8 `AttributeConverter` classes
@@ -218,28 +256,33 @@ exceptions — previously unreviewed in this depth
 ## Functional gaps (missing capability, not broken code) — found while searching for what
 could block the rescheduler and future work
 
-### [OPEN — significant] No way to change a `TaskInstance`'s status at all
-- **What's missing:** there is no controller, service method, or repository query method
-  anywhere that lets a client mark a placed occurrence as done/skipped/in-progress.
-  `TaskController` only operates on `Task` (the template) — create/read/update/delete —
-  never on `TaskInstance` (the placed occurrence). `TaskInstanceRepo` has exactly one method
-  (`deleteAllByTask`) — no `findById`, no way to fetch or mutate a single instance at all.
-- **Why this blocks real future work, not just a nice-to-have:**
-  - `ROADMAP.md` §6's standing rule ("every completion must record a timestamp") can never
-    actually happen — `TaskInstance.timeOfCompletion` exists as a field but nothing anywhere
-    can ever set it.
-  - `ROADMAP.md` §7's rescheduling trigger taxonomy explicitly includes "task skipped,"
-    "done early," "done late" — none of these events can ever be reported to the system,
-    since there's no endpoint through which they'd arrive. The rescheduler would have
-    nothing to react to.
-  - The adherence-tracking / "learns what you'll actually do" thesis (§6b) depends entirely
-    on completion data that currently has no path into the database.
-- **Not yet fixed** — needs at minimum: a `TaskInstanceController`/service with something
-  like `PATCH /instances/{id}/status`, plus `TaskInstanceRepo.findById` (already inherited
-  free from `JpaRepository`, just unused) and an ownership check (instance → task → user,
-  same pattern as `TaskService`'s existing ownership checks).
-- **Status:** flagged as high priority — this is likely worth building before or alongside
-  the rescheduler, since the rescheduler's trigger taxonomy directly depends on it.
+### [RESOLVED] No way to change a `TaskInstance`'s status at all
+- **What was missing:** there was no controller, service method, or repository query method
+  anywhere that let a client mark a placed occurrence as done/skipped/in-progress.
+  `TaskController` only operated on `Task` (the template) — never on `TaskInstance` (the
+  placed occurrence). `TaskInstanceRepo` had exactly one method (`deleteAllByTask`) — no
+  `findById`, no way to fetch or mutate a single instance at all.
+- **Fix, three new pieces, applied directly (2026-09-05):**
+  1. `UpdateTaskInstanceStatusDTO` — request body with a single `@NotNull TaskStatusEnum
+     status` field.
+  2. `TaskInstanceService.updateStatus(instanceId, newStatus, user)` — fetches via
+     `repo.findById(instanceId)` (already free from `JpaRepository`, just previously
+     unused), throws `NotFoundException` if absent, checks ownership via
+     `instance.getTask().getUser().equals(user)` (same pattern `TaskService` already uses
+     for `Task` ownership checks), sets `status`, and sets `timeOfCompletion` to `now()`
+     when transitioning to `DONE` or clears it to `null` otherwise (so reverting a `DONE`
+     instance back to `PENDING`/`IN_PROGRESS` doesn't leave a stale completion timestamp).
+  3. `TaskInstanceController` — new `PATCH /instances/{instanceId}/status`, authenticated
+     the same way as every other endpoint (`SecurityConfig`'s `anyRequest().authenticated()`
+     already covers it, no config change needed).
+- **Unblocks, now that this exists:**
+  - `ROADMAP.md` §6's "every completion must record a timestamp" rule can now actually
+    happen — `timeOfCompletion` has a real write path.
+  - `ROADMAP.md` §7's rescheduling trigger taxonomy ("task skipped," "done early," "done
+    late") now has an endpoint through which those events can arrive.
+- **Verified:** applied directly (2026-09-05); not yet re-tested via Postman (would need:
+  generate a schedule, `PATCH` one instance's status to `DONE`, confirm `timeOfCompletion`
+  is set and a second user's token gets `403`/`404` against the same instance).
 
 ### [RESOLVED] No way to view an already-generated schedule without regenerating it
 - **What was missing:** `SchedulerController` only had `POST /generate` — which deletes and
@@ -712,36 +755,91 @@ window initially expected to be padding-blocked
   Postman (would need: generate a schedule for a task with placed instances, delete that
   task, confirm no `500` and no orphaned rows in `task_instance`).
 
-### [OPEN] Zero automated tests — every fix tonight was verified manually, not by a test suite
-- No JUnit/integration tests exist anywhere in the project. Every bug found and fixed this
-  session (the redundant NPE check, the three-layer conditional-validation gaps, the
-  `incrementalStep` boundary bug) was caught by manual Postman testing, not an automated
-  regression check — several were themselves regressions introduced by earlier fixes in the
-  same session. Nothing currently stops the same class of regression from happening silently
-  next session.
-- **Not fixed — explicitly deferred per user decision (2026-08-30):** "tests we will put
-  ig" — acknowledged as needed, intentionally not started yet.
+### [MOVED — not dropped, see Suggestions] Zero automated tests
+- **Decision (2026-09-05):** kept as a known gap, but moved out of the OPEN backlog into
+  Suggestions below — see "Automated test suite" there for the reasoning and what a first
+  pass would cover.
 
-### [OPEN] No timezone handling anywhere in the data model
-- Every time field is `LocalTime`/`LocalDateTime` — no `ZoneId` or offset stored or read
-  anywhere. Fine for single-machine testing; a real correctness gap the moment this serves
-  users in more than one timezone, or a user travels.
+### [RESOLVED, deliberately scoped] No timezone handling anywhere in the data model
+- **What was broken:** every time field was `LocalTime`/`LocalDateTime` with no `ZoneId`
+  stored anywhere. The concrete bug: `SchedulerController.generateSchedule` called
+  `LocalDateTime.now()` — the **server's** default zone — to compute "now" for placement
+  and the past-time clamp, with no relationship to the user's actual local time. A user in
+  a different zone than the server (or the server just being deployed somewhere else later)
+  would get schedules generated against the wrong "now."
+- **Fix, deliberately scoped — not a full UTC-storage rearchitecture:**
+  1. `Profile.timezone` (`String`, IANA zone id e.g. `"Asia/Kolkata"`) added. Stored as
+     `String` rather than `java.time.ZoneId` directly, converted via `ZoneId.of(...)` at
+     each use site — avoids depending on Hibernate's native `ZoneId` mapping support.
+  2. `CreateProfileDTO` now requires `timezone`, validated via a new `@AssertTrue
+     isTimezoneValid()` that calls `ZoneId.of(timezone)` in a try/catch — same
+     conditional-validation pattern used elsewhere in the codebase (e.g. `RecurrenceDTO`).
+  3. `ProfileService.createProfile` copies it onto the entity.
+  4. `ScheduleGenerationService.generateSchedule` now computes `LocalDateTime.now(ZoneId.
+     of(profile.getTimezone()))` internally (having already loaded the profile for other
+     reasons) instead of receiving a server-zone `now` from the controller — the method
+     signature dropped its `LocalDateTime now` parameter entirely, `SchedulerController`
+     updated to match.
+  5. `TaskInstanceService.updateStatus`'s `timeOfCompletion` timestamp (set when a status
+     transitions to `DONE`) updated the same way, for consistency — it's the same class of
+     "when did this actually happen in the user's local time" question.
+- **Explicitly NOT covered by this fix, matching the original entry's scope:** `Instant`
+  fields (`User.createdAt`) are untouched — already zone-agnostic/correct by construction.
+  DST transitions aren't specially handled (relies on `ZoneId.of(...)`'s standard Java
+  behavior). A user physically traveling to a new zone mid-week without updating their
+  profile isn't handled — `Profile.timezone` is a single static setting, not detected from
+  request context. These are reasonable follow-ups if they ever matter, not silently
+  forgotten.
+- **Known migration gap:** any `Profile` row created before this change has `timezone =
+  NULL` in the DB — `ZoneId.of(null)` throws immediately. Existing test profiles need
+  either a manual DB update or a delete-and-recreate via `POST /profile/create` before this
+  is exercised again.
+- **Verified:** applied directly (2026-09-05); not yet re-tested via Postman.
 
-### [OPEN] Editing a `Task` doesn't propagate to its already-placed `TaskInstance` rows
-- **What's happening:** `updateTask` changes the `Task` template (duration, priority,
-  preferred window, etc.) but nothing re-places or updates existing `TaskInstance` rows tied
-  to it — they silently keep reflecting the *old* definition until the next full
-  `/schedule/generate` call regenerates everything from scratch.
-- **Related to, but distinct from, ROADMAP.md §2c items #4/#5** (no incremental placement,
-  destructive wholesale regeneration) — same root cause (no notion of "re-place just the
-  affected subset"), different symptom (this one manifests as silent drift between the
-  `Task` definition and reality, not data loss on regenerate).
+### [RESOLVED] Editing a `Task` didn't propagate to its already-placed `TaskInstance` rows
+- **What was broken:** `updateTask` changed the `Task` template (duration, priority,
+  preferred window, etc.) but nothing touched existing `TaskInstance` rows tied to it — they
+  silently kept reflecting the *old* definition until the next full `/schedule/generate` call
+  regenerated everything from scratch.
+- **Fix, deliberately minimal, applied directly (2026-09-05):** `updateTask` now calls
+  `taskInstanceRepo.deleteAllByTask(DBTask)` (the same method already used by `deleteTask`)
+  right after `applyDTOToExistingTask`, before saving. This does **not** re-place the task
+  immediately — it removes the now-stale instances so the drift-vs-reality gap closes to
+  "no instances until next generate" instead of "wrong instances forever." Genuine
+  incremental re-placement (re-running just this task's placement against the other tasks'
+  *current* occupied slots, without a full regenerate) is a meaningfully bigger feature —
+  `PlacementResult.placedSlots` only stores the *actual* (unpadded) range, not the *padded*
+  range that was actually reserved in `WeeklyTimeline` during the original generate, so
+  reconstructing other tasks' true occupied slots from persisted `TaskInstance` rows alone
+  isn't a straight read, it'd need re-deriving each other task's padding from its still-
+  current fields. Deliberately not attempted here — stays scoped to
+  `ROADMAP.md` §2c #4/#5 (no incremental placement) as a future decision, this fix just
+  stops the silent-drift symptom in the meantime.
+- **Verified:** applied directly (2026-09-05); not yet re-tested via Postman (would need:
+  generate a schedule, edit one task's duration, confirm `GET /schedule` no longer shows that
+  task's old instances, then re-run `/schedule/generate` and confirm it reappears correctly).
 
-### [OPEN] No concurrency protection on `/schedule/generate`
-- Two overlapping requests for the same user could interleave their delete/insert cycles in
-  ways `@Transactional` alone doesn't fully guard against across separate, concurrent HTTP
-  requests (each gets its own transaction). Not yet a confirmed live bug — flagged as a real
-  risk given the delete-then-reinsert pattern, not tested under actual concurrent load.
+### [RESOLVED] No concurrency protection on `/schedule/generate`
+- **What was broken:** two overlapping requests for the same user could interleave their
+  delete/insert cycles — `@Transactional` alone doesn't guard against this across separate,
+  concurrent HTTP requests, since each gets its own transaction; nothing serialized them
+  against each other.
+- **Fix confirmed via direct code read:** `ScheduleGenerationService` now holds a
+  `ConcurrentHashMap<UUID, Object>` of per-user lock objects (`userLocks`), with a
+  `lockFor(userId)` helper (`computeIfAbsent`). The entire body of `generateSchedule` —
+  task fetch, profile fetch, placement, bulk delete, and every instance save — now runs
+  inside `synchronized (lockFor(user.getUserId()))`. Two overlapping requests for the same
+  user now serialize against each other; requests from different users never block each
+  other, since each gets its own lock object.
+- **Deliberately scoped, not a distributed-lock solution:** this is a per-JVM in-memory
+  lock. Correct and sufficient for the project's current single-Cloud-VM deployment target
+  (`PROJECT_CONTEXT.md`'s stated deployment plan). If this ever runs behind a load balancer
+  with multiple app instances, a single JVM's lock map wouldn't see requests landing on a
+  different instance — would need a distributed lock (e.g. Redis, which is already in the
+  stack for other purposes) at that point. Not built now since it's not needed yet.
+- **Verified:** applied directly (2026-09-05); not yet load-tested (would need two
+  overlapping `/schedule/generate` requests fired concurrently for the same user — hard to
+  reliably trigger via manual Postman clicks, would need a small script).
 
 ### [RESOLVED] No visibility into why the scheduler placed something where it did
 - **What was broken:** debugging padding-boundary confusion earlier required manually
@@ -772,10 +870,22 @@ window initially expected to be padding-blocked
 - **Verified:** confirmed in code (2026-09-04 review pass); binding behavior itself not
   independently tested.
 
-### [OPEN] `JwtFilter` silently swallows all exceptions into a debug log
-- Including `NotFoundException` for a deleted user — worth a deliberate decision on
-  whether that's the desired behavior (e.g. should a deleted user's still-valid token
-  actively fail loudly rather than silently falling through?). Not yet decided either way.
+### [RESOLVED] `JwtFilter` silently swallowed all exceptions into a debug log
+- **What was broken:** a token referencing a deleted/missing user (`NotFoundException`)
+  was only logged, then `filterChain.doFilter` ran anyway with no authentication set — the
+  request silently continued as anonymous instead of being rejected. No deliberate decision
+  had been made on whether that was the right behavior.
+- **Fix confirmed via direct code read:** the `NotFoundException` branch now calls
+  `response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "User no longer exists")` and
+  `return`s immediately, instead of falling through to `filterChain.doFilter`. A deleted
+  user's still-valid token now fails loudly with a `401` rather than silently downgrading to
+  an unauthenticated request. The generic `catch (Exception ex)` branch (malformed/expired/
+  invalid-signature tokens) is unchanged — those still fall through to `filterChain.doFilter`
+  with no authentication set, which is the correct behavior for "no valid credentials
+  supplied" as opposed to "credentials pointed at something that no longer exists."
+- **Verified:** applied directly (2026-09-05); not yet re-tested via Postman (would need: log
+  in, delete that user's row directly in the DB, then retry a request with the still-valid
+  access token and confirm a `401` instead of the request silently going through anonymously).
 
 ### [RESOLVED] No lower bound preventing placement before `now`
 - **What was broken:** only the deadline (upper bound) was enforced in `generateCandidate`
@@ -792,11 +902,18 @@ window initially expected to be padding-blocked
   Postman (would need a request made mid-day against a task whose earliest natural slot
   falls before the current time).
 
-### [OPEN] `WeeklyTimeline` has no "which week" concept
+### [DEFERRED — folds into real-dates/calendar-anchoring, not solved standalone] `WeeklyTimeline` has no "which week" concept
 - Single recurring week only — a deadline pushing the search past 7 days out is clamped to
   avoid aliasing onto the wrong day, but genuine multi-week scheduling (e.g. "assignment
-  due in 3 weeks") isn't representable yet. Real limitation, not a bug — needs a
-  deliberate design decision before it matters.
+  due in 3 weeks") isn't representable yet. Real limitation, not a bug.
+- **Decision (2026-09-06):** don't bolt a week-index onto the current abstract-recurring-week
+  model just to patch this gap. `ROADMAP.md` §2c already schedules real-dates/calendar-anchoring
+  as the very next Scheduler step, ahead of incremental placement and rescheduling. Once
+  `TaskInstance` is anchored to an actual date instead of a recurring `DayOfWeek`, "which week"
+  stops being a missing concept and becomes trivial — it's just whichever week the date falls
+  in. Solving it here first would be throwaway work the moment that step lands.
+- **Status:** not fixed, deliberately not scheduled as its own task — resolved by design once
+  §2c step 1 (real-dates/calendar-anchoring) is built.
 
 ### [RESOLVED] `postPaddingMinutes` computed independently in two places in `SchedulerService`
 - **What was broken:** the same padding formula (`bufferTimeInMinutes +
@@ -823,6 +940,29 @@ window initially expected to be padding-blocked
 ---
 
 ## Suggestions / Refinements (not bugs — ideas for later, not yet scoped into `ROADMAP.md`)
+
+### [SUGGESTION] Automated test suite
+- **Context:** moved here from the OPEN backlog (2026-09-05). No JUnit/integration tests
+  exist anywhere in the project — every fix in this log was verified manually via Postman or
+  direct code read, several of them themselves regressions introduced by earlier fixes in the
+  same session. Nothing currently stops the same class of regression from happening silently.
+- **Where a first pass would pay off most, if this gets picked up:** `RecurrenceInterpreters`
+  (day-selection math — `pickSpreadDays` has already had two silent bugs caught only by
+  manual testing), `GenerateCandidateHelperMethods.shift`/`toRawMinutes` (the
+  midnight/week-boundary arithmetic this whole log's CRITICAL entry lives in), and
+  `SchedulerService.getCandidateResult`'s deadline-clamping logic — all pure functions, no
+  Spring context needed, cheapest possible unit tests to write and highest bug-density so far.
+- **Status:** parked, not scheduled — acknowledged as needed, intentionally not started yet.
+
+### [SUGGESTION] Refresh token rotation
+- **Context:** moved here from the OPEN backlog (2026-09-05) — `RefreshTokenService`/
+  `AuthService.refresh` mints a new access token per call but reuses the same refresh token
+  for its full 7-day Redis TTL. Decided not necessary at current solo/student-project scale.
+- **Idea, if this ever gets revisited:** on `refresh`, mint a *new* refresh token alongside
+  the new access token, store it in Redis with the same TTL, delete the old one, and return
+  both to the client. Optionally add reuse-detection (presenting an already-rotated-out
+  refresh token is a signal of theft) as a second step, not required for basic rotation.
+- **Status:** parked, not scheduled.
 
 > Distinct from both sections above: these aren't things that broke, and they aren't
 > committed roadmap scope either. They're improvement ideas surfaced while working on

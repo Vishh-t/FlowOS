@@ -16,20 +16,20 @@ import java.util.Set;
 @NoArgsConstructor
 public class Recurrence
 {
-    private
-    RecurrenceTypeEnum recurrenceTypeEnum;
-
+    private RecurrenceTypeEnum recurrenceTypeEnum;
 
     private WeeklyModeEnum weeklyMode;
+
     private Set<DayOfWeek> daysOfWeek;
+
     private Integer timesPerWeek;
 
-
     private Integer dayOfMonth;
-
 
     private Integer monthOfYear;
 
     private Set<DayOfWeek> excludedDaysOfWeek;
+
+    private DayOfWeek oneOffDay;
 
 }

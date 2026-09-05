@@ -52,6 +52,13 @@ public class TaskService
         }
 
         TaskCreationHelpers.applyDTOToExistingTask(DBTask, dto);
+
+        // template changed — existing placed instances now reflect a stale definition;
+        // drop them rather than leave them silently drifted. New instances appear on the
+        // next full /schedule/generate call. (No incremental re-placement yet — see
+        // ROADMAP.md §2c #4/#5.)
+        taskInstanceRepo.deleteAllByTask(DBTask);
+
         return repo.save(DBTask);
     }
 

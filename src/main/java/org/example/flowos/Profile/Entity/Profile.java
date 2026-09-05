@@ -29,5 +29,10 @@ public class Profile
 
     private LocalTime sleepTime;
 
+    // IANA zone id, e.g. "Asia/Kolkata". Stored as String rather than java.time.ZoneId to
+    // avoid depending on Hibernate's ZoneId mapping support — converted via ZoneId.of(...)
+    // at every point it's actually used (see ScheduleGenerationService, TaskInstanceService).
+    private String timezone;
+
     private DayOrNightPersonEnum typeOfPerson;
 }

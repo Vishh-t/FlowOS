@@ -117,6 +117,11 @@ public class AuthService
         String email = payload.getEmail();
         String name = (String) payload.get("name");
 
+        if (email == null || !Boolean.TRUE.equals(payload.getEmailVerified()))
+        {
+            throw new InvalidCredentialsException("Google account email is not verified");
+        }
+
         User user = repo.findByGoogleId(googleId);
 
         if (user == null)

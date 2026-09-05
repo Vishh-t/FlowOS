@@ -105,7 +105,9 @@ most-constrained-first tie-breaking). All passed as designed.
   current use case), only matters once mid-week rescheduling (§7) reuses `generateCandidate`.
 - `WeeklyTimeline` is architecturally a single recurring week (no "which week" concept) —
   a deadline pushing the search past 7 days out is clamped to avoid silently aliasing onto
-  the wrong day, but multi-week scheduling isn't representable yet.
+  the wrong day, but multi-week scheduling isn't representable yet. **Deferred, not patched
+  standalone (2026-09-06)** — resolved by design once real-dates/calendar-anchoring (§2c
+  step 1) lands, see `ISSUES_LOG.md`.
 - `Recurrence.dayOfMonth`/`monthOfYear` still unread — `MONTHLY`/`ANNUALLY` recurrence
   throws `UnsupportedOperationException` in `resolveTargetDays`, as originally scoped for
   later.
@@ -321,6 +323,19 @@ abstract week means rebuilding it once dates exist. Inserted as a new step below
 → **real-dates/calendar-anchored timeline (new, blocks 2/3/4/5/6)** → incremental placement
 + `ONE_OFF` support → rescheduling engine → scoring (can interleave with the above, no hard
 dependency).
+
+> 🔵 **FRONTEND PLUG-IN POINT (decided 2026-09-05):** build the first real frontend piece
+> (Calendar / week-view screen, per §4 module ownership and §5 Phase 3) right here — as soon
+> as `GET /schedule` returns real-date-anchored `TaskInstance` data, before incremental
+> placement starts. Reasoning: (1) this is the earliest point the response shape is stable —
+> building against it any earlier means reworking the frontend when dates land; waiting
+> longer delays value for no reason. (2) Everything after this point — incremental placement,
+> then rescheduling — is fundamentally "does this visually overlap / did this silently
+> disappear on regenerate" correctness work, exactly the class of bug this log shows is hard
+> to catch via Postman/JSON (week-boundary overlap bug, `pickSpreadDays` clustering,
+> padding-boundary confusion) and trivial to catch on a rendered week grid. Not scaffolding —
+> this is the real Calendar module from §4/§5 Phase 3, just sequenced earlier than "after
+> everything else."
 
 ---
 

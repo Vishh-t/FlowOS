@@ -31,6 +31,8 @@ public class RecurrenceDTO
 
     Set<DayOfWeek> excludedDaysOfWeek;
 
+    DayOfWeek oneOffDay;
+
     @AssertTrue(message = "daysOfWeek is required when weeklyMode is EXACT_DAYS")
     public boolean isDaysOfWeekValid()
     {
@@ -57,6 +59,16 @@ public class RecurrenceDTO
         if (recurrenceTypeEnum == RecurrenceTypeEnum.WEEKLY)
         {
             return weeklyMode != null;
+        }
+        return true;
+    }
+
+    @AssertTrue(message = "one_off day is required when recurrenceTypeEnum is oneOff")
+    public boolean isOneOffValid()
+    {
+        if (recurrenceTypeEnum == RecurrenceTypeEnum.ONE_OFF)
+        {
+            return oneOffDay != null;
         }
         return true;
     }

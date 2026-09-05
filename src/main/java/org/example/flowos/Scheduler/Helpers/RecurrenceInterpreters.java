@@ -40,9 +40,15 @@ public class RecurrenceInterpreters
 
         if (type == RecurrenceTypeEnum.ONE_OFF)
         {
-            if (!excluded.contains(now.getDayOfWeek()))
+            DayOfWeek oneOffDay = recurrence.getOneOffDay();
+
+            if (oneOffDay == null)
             {
-                result.add(now.getDayOfWeek());
+                oneOffDay = now.getDayOfWeek();
+            }
+            if (!excluded.contains(oneOffDay))
+            {
+                result.add(oneOffDay);
             }
 
         } else if (type == RecurrenceTypeEnum.DAILY)

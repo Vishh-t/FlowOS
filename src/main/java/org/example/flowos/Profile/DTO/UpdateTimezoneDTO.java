@@ -5,27 +5,16 @@ import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.example.flowos.Profile.Enums.DayOrNightPersonEnum;
 
-import java.time.LocalTime;
 import java.time.ZoneId;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class CreateProfileDTO
+public class UpdateTimezoneDTO
 {
     @NotNull
-    private LocalTime wakeTime;
-
-    @NotNull
-    private LocalTime sleepTime;
-
-    @NotNull
     private String timezone;
-
-    @NotNull
-    private DayOrNightPersonEnum typeOfPerson;
 
     @AssertTrue(message = "timezone must be a valid IANA zone id, e.g. Asia/Kolkata")
     private boolean isTimezoneValid()

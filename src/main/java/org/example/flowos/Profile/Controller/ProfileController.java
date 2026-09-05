@@ -3,6 +3,7 @@ package org.example.flowos.Profile.Controller;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.flowos.Profile.DTO.CreateProfileDTO;
+import org.example.flowos.Profile.DTO.UpdateTimezoneDTO;
 import org.example.flowos.Profile.Service.ProfileService;
 import org.example.flowos.User.Entity.User;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,12 @@ public class ProfileController
     public ResponseEntity<?> getProfileByUser(@AuthenticationPrincipal User user)
     {
         return new ResponseEntity<>(profileService.getProfile(user), HttpStatus.OK);
+    }
+
+    @PatchMapping("/timezone")
+    public ResponseEntity<?> updateTimezone(@AuthenticationPrincipal User user, @Valid @RequestBody UpdateTimezoneDTO dto)
+    {
+        return new ResponseEntity<>(profileService.updateTimezone(user, dto), HttpStatus.OK);
     }
 
 

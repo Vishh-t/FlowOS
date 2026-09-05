@@ -20,8 +20,7 @@ public class TaskCreationHelpers
 
         task.setEvent(event);
 
-        CreateTaskResult result = new CreateTaskResult(task, event);
-        return result;
+        return new CreateTaskResult(task, event);
     }
 
     public static void applyDTOToExistingTask(Task existingTask, CreateTaskDTO dto)
@@ -65,6 +64,7 @@ public class TaskCreationHelpers
             recurrence.setDaysOfWeek(dto.getRecurrence().getDaysOfWeek());
             recurrence.setTimesPerWeek(dto.getRecurrence().getTimesPerWeek());
             recurrence.setExcludedDaysOfWeek(dto.getRecurrence().getExcludedDaysOfWeek());
+            recurrence.setOneOffDay(dto.getRecurrence().getOneOffDay());
             event.setTaskRecurrence(recurrence);
         }
     }
