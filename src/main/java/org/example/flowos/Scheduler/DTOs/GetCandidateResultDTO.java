@@ -2,6 +2,7 @@ package org.example.flowos.Scheduler.DTOs;
 
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.PostPaddingMins;
 import org.example.flowos.Task.Embedables.Recurrence;
 
 import java.time.DayOfWeek;
@@ -42,6 +43,8 @@ public class GetCandidateResultDTO
     private boolean isAfterTask;
 
     private boolean isBothWay;
+
+    private PostPaddingMins postPaddingMins;
 
 
 }

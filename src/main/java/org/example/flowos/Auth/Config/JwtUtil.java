@@ -15,6 +15,9 @@ public class JwtUtil
     @Value("${jwt.secret}")
     private String secret;
 
+    @Value("${security.jwt.expiration}")
+    private int expiryTime;
+
     private SecretKey getSigningKey()
     {
         return Keys.hmacShaKeyFor(secret.getBytes());
@@ -27,7 +30,7 @@ public class JwtUtil
                 builder().
                 subject(userId.toString()).
                 issuedAt(new Date()).
-                expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 15)).signWith(getSigningKey()).
+                expiration(new Date(System.currentTimeMillis() + expiryTime)).signWith(getSigningKey()).
                 compact();
     }
 

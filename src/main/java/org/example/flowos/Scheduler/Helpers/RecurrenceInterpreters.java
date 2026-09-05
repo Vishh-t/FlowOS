@@ -16,7 +16,7 @@ import java.util.Set;
 @Component
 public class RecurrenceInterpreters
 {
-    public  List<DayOfWeek> resolveTargetDays(Recurrence recurrence, LocalDateTime now)
+    public List<DayOfWeek> resolveTargetDays(Recurrence recurrence, LocalDateTime now)
     {
         var excluded = recurrence.getExcludedDaysOfWeek();
         if (excluded == null)
@@ -36,18 +36,19 @@ public class RecurrenceInterpreters
 
         List<DayOfWeek> result = new ArrayList<>();
 
-
         RecurrenceTypeEnum type = recurrence.getRecurrenceTypeEnum();
 
         if (type == RecurrenceTypeEnum.ONE_OFF)
         {
-            result.add(now.getDayOfWeek());
-        }
-        else if (type == RecurrenceTypeEnum.DAILY)
+            if (!excluded.contains(now.getDayOfWeek()))
+            {
+                result.add(now.getDayOfWeek());
+            }
+
+        } else if (type == RecurrenceTypeEnum.DAILY)
         {
             result = allDays;
-        }
-        else if (type == RecurrenceTypeEnum.WEEKLY)
+        } else if (type == RecurrenceTypeEnum.WEEKLY)
         {
             if (WeeklyModeEnum.EXACT_DAYS == recurrence.getWeeklyMode())
             {
@@ -58,13 +59,11 @@ public class RecurrenceInterpreters
                         result.add(d);
                     }
                 }
-            }
-            else if (recurrence.getWeeklyMode() == WeeklyModeEnum.COUNT_ONLY)
+            } else if (recurrence.getWeeklyMode() == WeeklyModeEnum.COUNT_ONLY)
             {
                 result = pickSpreadDays(allDays, recurrence.getTimesPerWeek());
             }
-        }
-        else
+        } else
         {
             // MONTHLY / ANNUALLY not implemented yet
             throw new UnsupportedOperationException("Recurrence type not yet supported: " + type);
@@ -94,12 +93,18 @@ public class RecurrenceInterpreters
     public List<DayOfWeek> getAvailableDays(Recurrence recurrence)
     {
         Set<DayOfWeek> excluded = recurrence.getExcludedDaysOfWeek();
-        if (excluded == null) { excluded = new HashSet<>(); }
+        if (excluded == null)
+        {
+            excluded = new HashSet<>();
+        }
 
         List<DayOfWeek> allDays = new ArrayList<>();
         for (DayOfWeek d : DayOfWeek.values())
         {
-            if (!excluded.contains(d)) { allDays.add(d); }
+            if (!excluded.contains(d))
+            {
+                allDays.add(d);
+            }
         }
         return allDays;
     }

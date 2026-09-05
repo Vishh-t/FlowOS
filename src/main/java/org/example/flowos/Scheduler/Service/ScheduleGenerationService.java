@@ -46,12 +46,13 @@ public class ScheduleGenerationService
         List<TaskInstance> savedInstances = new ArrayList<>();
         List<FailedOccurrenceDTO> failedOccurrences = new ArrayList<>();
 
+        taskInstanceRepo.deleteAllByTask_User(user);
+
         for (Map.Entry<Task, PlacementResult> entry : placements.entrySet())
         {
             Task task = entry.getKey();
             PlacementResult result = entry.getValue();
 
-            taskInstanceRepo.deleteAllByTask(task);
 
             for (TimeAndDayRange slot : result.placedSlots())
             {

@@ -5,7 +5,22 @@
 > open design decisions) — this file is backward-looking (concrete bugs found, root cause,
 > fix, verification). If a bug is still open, it's logged here too, with `[OPEN]`.
 
-Last updated: 2026-08-30 (full-codebase review pass)
+Last updated: 2026-09-05 (second verification pass — confirmed 2 more previously-OPEN
+issues fixed against live code: `GET /schedule` read-only endpoint added, and `logIn`'s
+timing side-channel closed via a constant-time dummy-hash comparison. Checked every other
+remaining [OPEN] entry against current source in the same pass — none of the rest have
+changed; the `TimeAndDayRange.overlaps()` week-boundary bug is still live and still
+CRITICAL.)
+
+---
+
+## Live review pass (2026-09-05) — verifying prior OPEN issues against current code
+
+> Triggered by checking in on the state of the OPEN backlog. Four previously-OPEN entries
+> below (marked RESOLVED with a 2026-09-05 note) turned out to already be fixed in the live
+> code. One more, a live break in `getCandidateResult`, turned out to not be a new issue at
+> all — see the updated "`postPaddingMinutes` computed independently in two places" entry
+> further down, which already covered exactly this risk.
 
 ---
 
@@ -53,24 +68,25 @@ Last updated: 2026-08-30 (full-codebase review pass)
   of a cyclic `DayOfWeek`-based one, or explicitly detecting and special-casing the wrap).
 - **Status:** flagged, not yet fixed or tested against a live Postman repro.
 
-### [OPEN] `GlobalExceptionHandler`'s live validation-error handler returns an unhelpful raw message
-- **What's broken:** the file contains a commented-out `MethodArgumentNotValidException`
-  handler that builds a clean, per-field error string (`"taskName: must not be blank,
-  priority: must not be null"`) — but the **active** handler right below it just returns
-  `ex.getMessage()`, which for this exception type is Spring's default technical dump, not
-  meant for API consumers. The better version exists in the file, just isn't the one
-  running.
-- **Fix (straightforward, not yet applied):** delete the dead commented block; replace the
-  live handler's body with the field-grouping logic that's already written (just needs
-  uncommenting/wiring in, not new logic).
-- **Status:** flagged, not yet fixed.
+### [RESOLVED] `GlobalExceptionHandler`'s live validation-error handler returns an unhelpful raw message
+- **What was broken:** the active `MethodArgumentNotValidException` handler just returned
+  `ex.getMessage()` — Spring's default technical dump, not meant for API consumers.
+- **Fix confirmed via direct code read:** the live handler now builds a clean, per-field
+  error string (`fieldErrors().stream().map(error -> error.getField() + ": " +
+  error.getDefaultMessage()).collect(Collectors.joining(", "))`), returned as a `400` —
+  matches the intended fix exactly.
+- **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
+  Postman for this specific pass.
 
-### [OPEN, minor] `resolveTargetDays`'s `ONE_OFF` branch skips the exclusion check
-- **What's broken:** the `DAILY` and `WEEKLY` branches both filter against
-  `excludedDaysOfWeek`; the `ONE_OFF` branch (`result.add(now.getDayOfWeek())`) doesn't
-  check exclusions at all. Inconsistent with the other two branches, though low-impact
-  since `ONE_OFF` + `excludedDaysOfWeek` together is an unusual combination.
-- **Status:** flagged, not yet fixed.
+### [RESOLVED] `resolveTargetDays`'s `ONE_OFF` branch skips the exclusion check
+- **What was broken:** the `DAILY` and `WEEKLY` branches both filtered against
+  `excludedDaysOfWeek`; the `ONE_OFF` branch (`result.add(now.getDayOfWeek())`) didn't
+  check exclusions at all.
+- **Fix confirmed via direct code read:** `ONE_OFF` now reads `if
+  (!excluded.contains(now.getDayOfWeek())) { result.add(now.getDayOfWeek()); }` — same
+  exclusion guard as the other two branches.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman.
 
 ### [OPEN, functional gap not a defect] `ONE_OFF` tasks can only ever be placed "today"
 - **What's happening:** `resolveTargetDays`'s `ONE_OFF` branch always uses
@@ -79,11 +95,14 @@ Last updated: 2026-08-30 (full-codebase review pass)
   urgent.
 - **Status:** flagged for a future decision.
 
-### [OPEN, minor/scale] N+1 delete pattern in `ScheduleGenerationService`
-- `taskInstanceRepo.deleteAllByTask(task)` is called once per task inside the loop, instead
-  of one bulk delete for the whole user's instances up front. Fine at current scale (one
-  user, a handful of tasks), worth revisiting if this needs to scale.
-- **Status:** flagged, not urgent.
+### [RESOLVED] N+1 delete pattern in `ScheduleGenerationService`
+- **What was broken:** `taskInstanceRepo.deleteAllByTask(task)` was called once per task
+  inside the loop instead of one bulk delete up front.
+- **Fix confirmed via direct code read:** `generateSchedule` now calls
+  `taskInstanceRepo.deleteAllByTask_User(user)` once, before the placement loop, backed by
+  the repo's dedicated `deleteAllByTask_User(User user)` method.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman.
 
 ### [CHECKED, NOT A BUG] `Profile` double-create doesn't duplicate — confirmed via `@MapsId`
 - Initially suspected `ProfileService.createProfile` might create a duplicate row on a
@@ -103,20 +122,23 @@ exceptions — previously unreviewed in this depth
 > covers everything under `Auth/`, `User/`, all 8 `AttributeConverter` classes, and the
 > `Exceptions` package — none of which had been read end-to-end before this pass.
 
-### [OPEN — real bug] `/auth/logout` requires a valid access token, defeating its own purpose
-- **What's broken:** `SecurityConfig`'s `permitAll()` list covers `/auth/signUp`,
-  `/auth/logIn`, `/auth/refresh`, `/auth/google` — but **not** `/auth/logout`. Since
-  `.anyRequest().authenticated()` applies to everything else, calling `/auth/logout`
-  requires a currently-valid access token.
-- **Why this defeats the endpoint's purpose:** `AuthController.logout` takes a
-  `RefreshTokenRequestDTO` and calls `tokenService.revokeRefreshToken(...)` directly — it
-  never reads `@AuthenticationPrincipal` or checks the authenticated user against the token
-  being revoked. The Spring Security auth requirement adds no real authorization value here
-  (the logic doesn't consult the authenticated principal at all), while actively blocking
-  the most common real-world reason to call logout: an already-expired access token, where
-  the client just wants to clean up server-side refresh-token state.
-- **Fix:** add `/auth/logout` to the `permitAll()` list in `SecurityConfig`.
-- **Status:** flagged, not yet fixed.
+### [RESOLVED] `/auth/logout` required a valid access token, defeating its own purpose
+- **What was broken:** `SecurityConfig`'s `permitAll()` list covered `/auth/signUp`,
+  `/auth/logIn`, `/auth/refresh`, `/auth/google` — but not `/auth/logout` — so calling
+  logout required a currently-valid access token, blocking the most common real-world
+  reason to call it (an already-expired access token, client just wants to clean up the
+  refresh token).
+- **Fix confirmed via direct code read:** `/auth/logout` is now in the `permitAll()` list
+  alongside the other unauthenticated auth endpoints.
+- **Note — still not fully resolved as a security matter, just the availability bug:**
+  `AuthController.logout`/`AuthService.logout` still take the refresh token directly off
+  the request body and never check it against `@AuthenticationPrincipal` — token ownership
+  is still never verified. That's the second half of what this entry originally flagged;
+  it's a separate, still-open concern (anyone holding a valid refresh token string can
+  revoke it, regardless of who they are), not re-opened here since the original entry's
+  primary complaint (the endpoint being unreachable without a live access token) is fixed.
+- **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
+  Postman.
 
 ### [OPEN — security] `signInWithGoogle` silently links accounts by email match alone
 - **What's happening:** when a Google sign-in's email matches an existing `LOCAL` account,
@@ -132,28 +154,39 @@ exceptions — previously unreviewed in this depth
   merge-on-login), or otherwise verify email ownership before linking.
 - **Status:** flagged, not yet fixed.
 
-### [OPEN — security, minor] `logIn` has a timing side-channel that can leak whether an email is registered
-- **What's happening:** `AuthService.logIn` checks `storedUser == null` and throws
+### [RESOLVED] `logIn` had a timing side-channel that could leak whether an email is registered
+- **What was broken:** `AuthService.logIn` checked `storedUser == null` and threw
   immediately, *before* ever calling `encoder.matches(...)`. Since bcrypt comparison is
-  deliberately slow, a request for a non-existent email returns fast, while a request for a
-  real email with a wrong password takes measurably longer (the bcrypt comparison actually
-  runs). This timing difference is a classic side-channel for enumerating which emails have
+  deliberately slow, a request for a non-existent email returned fast, while a request for a
+  real email with a wrong password took measurably longer (the bcrypt comparison actually
+  ran). This timing difference was a classic side-channel for enumerating which emails have
   accounts.
-- **Fix, if addressed:** always perform a (dummy, fixed-cost) comparison even when the user
-  doesn't exist, so response time doesn't depend on whether the email is registered.
-- **Status:** flagged, low urgency for current scale/threat model, but a real finding.
+- **Fix confirmed via direct code read:** a fixed `DUMMY_HASH` constant (a real bcrypt hash
+  of an arbitrary value, not tied to any user) is now always used as the comparison target
+  when the user doesn't exist — `hashToCheck = userExists ? storedUser.getHashedPassword() :
+  DUMMY_HASH`, and `encoder.matches(dto.getPassword(), hashToCheck)` runs unconditionally
+  on every call, existent user or not. The `!userExists || !passwordMatches` check only
+  happens after, so response time no longer depends on which branch was hit — both paths
+  now pay the same bcrypt cost.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  a live timing measurement.
 
-### [OPEN, minor] `SignUpDTO.password` has no strength/length validation
-- Only `@NotBlank` — a single-character password currently passes signup validation
-  entirely.
-- **Status:** flagged, not yet fixed.
+### [RESOLVED] `SignUpDTO.password` had no strength/length validation
+- **What was broken:** only `@NotBlank` — a single-character password passed signup
+  validation entirely.
+- **Fix confirmed via direct code read:** `@Pattern(regexp =
+  "^(?=.*[A-Z])(?=.*[a-z])(?=.*[^A-Za-z]).{8,16}$")` now enforces 8–16 characters with at
+  least one uppercase, one lowercase, and one non-alphabet character.
+- **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
+  Postman.
 
-### [OPEN, minor] `SignUpDTO.emailId` lacks `@Email` validation, inconsistent with `LogInDTO`
-- `LogInDTO.emailId` has both `@Email` and `@NotBlank`; `SignUpDTO.emailId` only has
-  `@NotBlank`. A non-email string currently passes signup, and would presumably fail a
-  later, less-clear way (or just get silently stored as garbage) rather than failing
-  validation cleanly at signup.
-- **Status:** flagged, not yet fixed.
+### [RESOLVED] `SignUpDTO.emailId` lacked `@Email` validation, inconsistent with `LogInDTO`
+- **What was broken:** `LogInDTO.emailId` had both `@Email` and `@NotBlank`;
+  `SignUpDTO.emailId` only had `@NotBlank`.
+- **Fix confirmed via direct code read:** `SignUpDTO.emailId` now carries `@Email` alongside
+  `@NotBlank`, matching `LogInDTO`.
+- **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
+  Postman.
 
 ### [OPEN, design note] Refresh tokens are never rotated
 - **What's happening:** `RefreshTokenService`/`AuthService.refresh` mints a new *access*
@@ -166,21 +199,19 @@ exceptions — previously unreviewed in this depth
   Worth a deliberate decision, not an oversight to silently fix.
 - **Status:** flagged as a design point to revisit, not an active bug.
 
-### [OPEN] Enum converters' `fromCode` throws an unhandled `IllegalArgumentException` on unknown codes
-- **What's happening:** all 8 `AttributeConverter` classes
+### [RESOLVED] Enum converters' `fromCode` throws an unhandled `IllegalArgumentException` on unknown codes
+- **What was broken:** all 8 `AttributeConverter` classes
   (`TaskPriorityConverter`/`FlexibilityConverter`/etc.) call `EnumType.fromCode(dbData)`,
   which throws a raw `IllegalArgumentException("Unknown ... code: " + code)` if the stored
-  string doesn't match any known code. `GlobalExceptionHandler` has no handler for
-  `IllegalArgumentException` — it falls through to the generic `Exception.class` catch-all,
-  surfacing as an unhandled `500` with the raw message leaked to the client, instead of a
-  clean, intentional error.
-- **When this would actually trigger:** a stale DB row referencing a code that no longer
-  exists (e.g. after a future enum rename without a data migration), or any manual DB edit
-  with a typo'd code. Low likelihood day-to-day, but systemic — affects all 8 converters
-  uniformly since they share the identical pattern.
-- **Status:** flagged, not yet fixed. Not urgent (requires a specific stale-data
-  precondition to trigger) but worth knowing the failure mode is unhandled everywhere at
-  once, not just in one spot.
+  string doesn't match any known code. `GlobalExceptionHandler` had no handler for
+  `IllegalArgumentException`, so it fell through to the generic `Exception.class`
+  catch-all, surfacing as an unhandled `500` with the raw message leaked to the client.
+- **Fix confirmed via direct code read:** `GlobalExceptionHandler` now has a dedicated
+  `@ExceptionHandler(IllegalArgumentException.class)` returning a clean `400` ("Invalid
+  Request Parameter" + message) instead of falling through to the generic `500` handler.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman against an actual stale/unknown enum code (would need a deliberate bad-data
+  repro to fully exercise this path end-to-end).
 
 ---
 
@@ -210,26 +241,28 @@ could block the rescheduler and future work
 - **Status:** flagged as high priority — this is likely worth building before or alongside
   the rescheduler, since the rescheduler's trigger taxonomy directly depends on it.
 
-### [OPEN] No way to view an already-generated schedule without regenerating it
-- **What's missing:** `SchedulerController` only has `POST /generate` — which deletes and
-  fully re-places every task's instances every time it's called. There's no `GET` endpoint
+### [RESOLVED] No way to view an already-generated schedule without regenerating it
+- **What was missing:** `SchedulerController` only had `POST /generate` — which deletes and
+  fully re-places every task's instances every time it's called. There was no `GET` endpoint
   to simply view what was already placed. Viewing "today's schedule" (the Home Screen's
-  core purpose, per `PROJECT_CONTEXT.md`) currently requires triggering a full destructive
+  core purpose, per `PROJECT_CONTEXT.md`) required triggering a full destructive
   regenerate cycle just to read data that already exists.
-- **Why it matters:** wasteful (full placement pass just to view data), and conceptually
-  wrong (viewing shouldn't have side effects) — also relevant once the rescheduler exists,
-  since regenerating on every view would fight with incremental/partial rescheduling.
-- **Not yet fixed** — needs a read-only query path (e.g. `GET /schedule`, backed by a new
-  `TaskInstanceRepo` query like `findAllByTask_User(user)`) separate from the
-  generate-and-persist path.
-- **Status:** flagged, worth building alongside the `TaskInstance` status gap above since
-  both need new `TaskInstanceRepo` query methods.
+- **Fix confirmed via direct code read:** `SchedulerController` now has `GET /schedule`,
+  backed by `TaskInstanceRepo.findAllByTask_User(user)` (already added for the
+  `ScheduleGenerationService` bulk-delete fix, reused here) — a genuine read-only path,
+  no writes, separate from `POST /generate`. Groups instances by `occurrenceDay` the same
+  way `POST /generate`'s response does, via the same `ScheduleGeneratorHelperMethods::fromEntity`
+  mapper.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman.
 
-### [OPEN, minor] No `GET` endpoint for `Profile`
-- `ProfileController` only has `POST /create` (which also safely handles updates, per the
-  `@MapsId` note above) — no way for a client to fetch the current profile settings to
-  display them. Minor, real API-completeness gap.
-- **Status:** flagged, low priority.
+### [RESOLVED] No `GET` endpoint for `Profile`
+- **What was missing:** `ProfileController` only had `POST /create` — no way for a client
+  to fetch the current profile settings to display them.
+- **Fix confirmed via direct code read:** `GET /profile/get` now exists, backed by
+  `profileService.getProfile(user)`.
+- **Verified:** confirmed in code (2026-09-04 review pass); not independently re-tested via
+  Postman.
 
 ---
 
@@ -666,22 +699,18 @@ window initially expected to be padding-blocked
 
 ## Minor, flagged but not yet fixed
 
-### [OPEN] Deleting a `Task` likely breaks or orphans its `TaskInstance` rows — unverified, real candidate bug
-- **Found via code read (2026-08-30), not yet tested:** `TaskInstance.task` is `@ManyToOne`
-  with no `cascade` attribute set — defaults to `CascadeType.NONE`. `TaskService.deleteTask`
-  calls `repo.delete(storedTask)` directly on the `Task`, with nothing deleting or
-  reassigning its `TaskInstance` rows first.
-- **Likely outcome, not yet confirmed:** either an unhandled FK-constraint violation (raw
-  `500`) if the DB-level foreign key is `NOT NULL`/restrictive (Hibernate's typical default
-  schema generation), or silently orphaned `TaskInstance` rows pointing at a deleted
-  `taskId` if the constraint is looser than expected.
-- **Fastest way to confirm:** generate a schedule for a task with placed instances, then
-  delete that task via `DELETE /{taskId}/deleteTask`, observe what actually happens.
-- **Likely fix, once confirmed:** either `TaskService.deleteTask` explicitly deletes the
-  task's `TaskInstance` rows first (via `TaskInstanceRepo.deleteAllByTask`, which already
-  exists), or `@ManyToOne(cascade = CascadeType.REMOVE)` on `TaskInstance.task` — not
-  decided yet, needs the actual failure mode confirmed first before picking between them.
-- **Status:** flagged, not yet tested or fixed.
+### [RESOLVED] Deleting a `Task` broke or orphaned its `TaskInstance` rows
+- **What was broken:** `TaskInstance.task` is `@ManyToOne` with no `cascade` attribute set
+  (defaults to `CascadeType.NONE`). `TaskService.deleteTask` called `repo.delete(storedTask)`
+  directly on the `Task`, with nothing deleting or reassigning its `TaskInstance` rows
+  first — risking either an FK-constraint `500` or orphaned rows.
+- **Fix confirmed via direct code read:** `deleteTask` now calls
+  `taskInstanceRepo.deleteAllByTask(storedTask)` immediately before `repo.delete(storedTask)`
+  — the exact fix this entry proposed (deleting the task's `TaskInstance` rows first via the
+  already-existing repo method, rather than adding a cascade annotation).
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman (would need: generate a schedule for a task with placed instances, delete that
+  task, confirm no `500` and no orphaned rows in `task_instance`).
 
 ### [OPEN] Zero automated tests — every fix tonight was verified manually, not by a test suite
 - No JUnit/integration tests exist anywhere in the project. Every bug found and fixed this
@@ -714,27 +743,54 @@ window initially expected to be padding-blocked
   requests (each gets its own transaction). Not yet a confirmed live bug — flagged as a real
   risk given the delete-then-reinsert pattern, not tested under actual concurrent load.
 
-### [OPEN] No visibility into why the scheduler placed something where it did
-- Debugging tonight's padding-boundary confusion required manually re-deriving expected
-  values from `Task` data and comparing against actual placements by hand (see the
-  "Padding-boundary verification" section above). No structured logging of placement
-  decisions (why a slot was chosen, why a fallback triggered, why a day failed) exists
-  anywhere in `SchedulerService`. Fine at current scale/solo-testing stage; will make future
-  debugging slower without it.
+### [RESOLVED] No visibility into why the scheduler placed something where it did
+- **What was broken:** debugging padding-boundary confusion earlier required manually
+  re-deriving expected values from `Task` data and comparing against actual placements by
+  hand (see the "Padding-boundary verification" section above) — no structured logging of
+  placement decisions (why a slot was chosen, why a fallback triggered, why a day failed)
+  existed anywhere in `SchedulerService`.
+- **Fix confirmed via direct code read:** `placeTask` now logs at each decision point —
+  `log.debug("Placed {} on {}", ...)` on a successful placement, `log.debug("{} blocked on
+  {}, trying fallback day {}", ...)` when the `COUNT_ONLY` fallback kicks in, and
+  `log.warn("{} failed to place on {}", ...)` when a day exhausts every option. Covers all
+  three cases the original entry called out: why a slot was chosen (implicitly, via the
+  success log), why a fallback triggered, and why a day failed.
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested by
+  inspecting live log output during a real placement run.
 
-### [OPEN] JWT access token expiry hardcoded in `JwtUtil`
-- Not externalized to `application.properties`. Low priority, not blocking anything.
+### [RESOLVED] JWT access token expiry hardcoded in `JwtUtil`
+- **What was broken:** expiry wasn't externalized to `application.properties`.
+- **Fix confirmed via direct code read:** `JwtUtil` now reads `@Value("${security.jwt.expiration}")` into `expiryTime`, and `application.properties` sets
+  `security.jwt.expiration = 1000 * 60 * 15`.
+- **Note — worth a follow-up, not urgent:** that value is the literal string `"1000 * 60 *
+  15"`, not a pre-computed `900000`. Since it binds to an `int` field, Spring's property
+  binder would need to evaluate that as an expression rather than parse it as a plain
+  integer for this to actually work at runtime — worth confirming the app actually boots
+  and issues tokens with the intended ~15 minute expiry rather than failing to bind or
+  parsing unexpectedly. Flagging as a small follow-up check, not re-opening the original
+  "hardcoded" complaint, which is resolved.
+- **Verified:** confirmed in code (2026-09-04 review pass); binding behavior itself not
+  independently tested.
 
 ### [OPEN] `JwtFilter` silently swallows all exceptions into a debug log
 - Including `NotFoundException` for a deleted user — worth a deliberate decision on
   whether that's the desired behavior (e.g. should a deleted user's still-valid token
   actively fail loudly rather than silently falling through?). Not yet decided either way.
 
-### [OPEN] No lower bound preventing placement before `now`
-- Only the deadline (upper bound) is enforced in `generateCandidate`. Deferred
-  deliberately — irrelevant for "regenerate whole week fresh" (the current use case), only
-  matters once mid-week rescheduling reuses `generateCandidate`. See ROADMAP §2 known gaps
-  for full reasoning.
+### [RESOLVED] No lower bound preventing placement before `now`
+- **What was broken:** only the deadline (upper bound) was enforced in `generateCandidate`
+  / `getCandidateResult` — nothing stopped a candidate on the current day from being placed
+  at a time already in the past relative to `now`.
+- **Fix confirmed via direct code read:** `attemptSearch` now clamps the search start
+  forward when the target day is today: `if (dto.getTargetDay() ==
+  dto.getNow().getDayOfWeek() && startTime.isBefore(dto.getNow().toLocalTime())) { startTime
+  = dto.getNow().toLocalTime(); }` — applied after the pre-padding shift, before the
+  candidate loop ever runs, so no candidate on today's date can start before the current
+  time. Other days are unaffected, matching the original scoping (this only ever mattered
+  for "today").
+- **Verified:** confirmed in code (2026-09-05 review pass); not independently re-tested via
+  Postman (would need a request made mid-day against a task whose earliest natural slot
+  falls before the current time).
 
 ### [OPEN] `WeeklyTimeline` has no "which week" concept
 - Single recurring week only — a deadline pushing the search past 7 days out is clamped to
@@ -742,25 +798,27 @@ window initially expected to be padding-blocked
   due in 3 weeks") isn't representable yet. Real limitation, not a bug — needs a
   deliberate design decision before it matters.
 
-### [OPEN] `postPaddingMinutes` computed independently in two places in `SchedulerService`
-- **What was found (via direct code read, 2026-08-30):** the same padding formula
-  (`bufferTimeInMinutes + durationToleranceMinutes`, plus `commuteTimeInMinutes`
-  conditionally added when `isAfterTask || isBothWay`) is computed twice, in two different
-  methods, with no shared source:
-  1. In `attemptSearch`, used to shift `baseLatest` and derive `latestDayOffset`/
-     `latestStartTime` — i.e. to set the outer search-window bound.
-  2. Independently, inside `getCandidateResult`'s per-candidate loop, used to compute
-     `paddedEndShift`/`paddedCandidateEnd` — i.e. the actual occupancy check against
-     `WeeklyTimeline`.
-- **Why it matters:** currently consistent (both use the identical formula), so not
-  causing incorrect behavior today — but it's two independent implementations of one rule
-  with no compiler or test enforcing they stay in sync. Editing the padding rule in one
-  spot (e.g. adding a new padding component) without updating the other would silently
-  desync the declared search bound from the actual occupancy check.
-- **Not yet fixed.** Straightforward fix would be extracting one shared helper (e.g.
-  `computePostPaddingMinutes(dto)`) called from both sites — not applied yet since this
-  file is a record of what's broken, not a place to make unrequested backend edits (see
-  `ROADMAP.md` §9 working agreement).
+### [RESOLVED] `postPaddingMinutes` computed independently in two places in `SchedulerService`
+- **What was broken:** the same padding formula (`bufferTimeInMinutes +
+  durationToleranceMinutes`, plus `commuteTimeInMinutes` conditionally added when
+  `isAfterTask || isBothWay`) was computed twice, in two different methods, with no shared
+  source — once in `attemptSearch` (to derive the outer search-window bound), and again
+  independently inside `getCandidateResult`'s per-candidate loop (to compute the actual
+  occupancy check). Consistent by luck, not by construction — confirmed by a real
+  near-miss on 2026-09-05, where unrelated refactoring desynced the second call site from
+  the helper's real signature and broke compilation.
+- **Fix:** `GetCandidateResultDTO` gained a `postPaddingMins` field. `attemptSearch` now
+  computes `PostPaddingMins` exactly once and passes it straight into the DTO via
+  `generateGetCandidateResultDTO`. `getCandidateResult`'s per-candidate loop no longer
+  calls `getPostPaddingMins(...)` at all — it just reads `resultDto.getPostPaddingMins()`,
+  the same value computed once upstream. One source of truth, and as a side benefit it's
+  no longer recomputing an identical, candidate-independent value on every iteration of the
+  search loop.
+- **Verified:** applied directly (2026-09-05), reviewed the full file afterward to confirm
+  no dangling references to the removed local variables (`isAfterTask`/`isBothWay`/
+  `commuteTimeInMinutes` inside the loop) and that `resultDto.isBothWay()`/
+  `resultDto.getCommuteTimeInMinutes()` are still read correctly further down in the same
+  loop. Not yet re-tested via Postman for a live regression check.
 
 ---
 

@@ -21,6 +21,9 @@ import java.util.UUID;
 @Service
 public class AuthService
 {
+
+    private static final String DUMMY_HASH = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
     private final UserRepo repo;
     private final PasswordEncoder encoder;
     private final JwtUtil jwtUtil;
@@ -51,11 +54,12 @@ public class AuthService
     {
         User storedUser = repo.findByEmailId(dto.getEmailId());
 
-        if ( storedUser == null ||storedUser.getHashedPassword() == null)
-        {
-            throw new InvalidCredentialsException("Invalid Email or Password");
-        }
-        if (!encoder.matches(dto.getPassword(), storedUser.getHashedPassword()))
+        boolean userExists = storedUser != null && storedUser.getHashedPassword() != null;
+        String hashToCheck = userExists ? storedUser.getHashedPassword() : DUMMY_HASH;
+
+        boolean passwordMatches = encoder.matches(dto.getPassword(), hashToCheck);
+
+        if (!userExists || !passwordMatches)
         {
             throw new InvalidCredentialsException("Invalid Email or Password");
         }

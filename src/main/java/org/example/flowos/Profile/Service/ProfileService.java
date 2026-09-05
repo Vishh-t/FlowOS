@@ -23,4 +23,9 @@ public class ProfileService
 
         return profileRepo.save(profile);
     }
+
+    public Profile getProfile(User user)
+    {
+        return profileRepo.findByUser(user);
+    }
 }

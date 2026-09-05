@@ -1,6 +1,7 @@
 package org.example.flowos.Scheduler.Service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.example.flowos.Profile.Entity.Profile;
 import org.example.flowos.Scheduler.DTOs.PlaceTaskDTO;
 import org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethods.ShiftedTime;
@@ -31,6 +32,7 @@ import static org.example.flowos.Scheduler.Helpers.GenerateCandidateHelperMethod
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SchedulerService
 {
     Optional<CandidateResult> generateCandidate(GenerateCandidateDTO dto)
@@ -62,18 +64,12 @@ public class SchedulerService
 
         boolean isBothWay = dto.getTask().getEvent().getCommuteApplicableWay().equals(CommuteApplicationEnum.BOTH_WAYS);
 
-        int bufferTimeInMinutes = dto.getTask().getEvent().getBufferTimeInMinutes();
-
-        int durationToleranceMinutes = dto.getTask().getEvent().getTime().getDurationToleranceMinutes();
-
         int commuteTimeInMinutes = dto.getTask().getEvent().getCommuteTimeInMinutes();
-        int postPaddingMinutes = bufferTimeInMinutes + durationToleranceMinutes;
+
+        PostPaddingMins calculatedPostPaddingMins = getPostPaddingMins(dto, isAfterTask, isBothWay, commuteTimeInMinutes);
+
         int prePaddingMinutes = 0;
 
-        if (isAfterTask || isBothWay)
-        {
-            postPaddingMinutes += commuteTimeInMinutes;
-        }
         if (isBeforeTask || isBothWay)
         {
             prePaddingMinutes += commuteTimeInMinutes;
@@ -86,18 +82,25 @@ public class SchedulerService
 
         ShiftedTime shiftedStart = shift(baseStart, prePaddingMinutes);
         int startDayOffset = shiftedStart.dayOffset();
+
         LocalTime startTime = shiftedStart.time();
 
-        ShiftedTime shiftedLatest = shift(baseLatest, -(taskDurationInMinutes + postPaddingMinutes));
+        if (dto.getTargetDay() == dto.getNow().getDayOfWeek() && startTime.isBefore(dto.getNow().toLocalTime()))
+        {
+            startTime = dto.getNow().toLocalTime();
+        }
+
+        ShiftedTime shiftedLatest = shift(baseLatest, -(taskDurationInMinutes + calculatedPostPaddingMins.postPaddingMinutes()));
         int latestDayOffset = (latestCrossesMidnight ? 1 : 0) + shiftedLatest.dayOffset();
         LocalTime latestStartTime = shiftedLatest.time();
 
-        GetCandidateResultDTO resultDto = generateGetCandidateResultDTO(dto, excludedDaysOfWeek, taskRecurrence, isBothWay, isAfterTask, isBeforeTask, startTime, latestStartTime, bufferTimeInMinutes, startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep, durationToleranceMinutes, commuteTimeInMinutes);
+        GetCandidateResultDTO resultDto = generateGetCandidateResultDTO(dto, excludedDaysOfWeek, taskRecurrence, isBothWay, isAfterTask, isBeforeTask, startTime, latestStartTime, calculatedPostPaddingMins.bufferTimeInMinutes(), startDayOffset, latestDayOffset, taskDurationInMinutes, incrementalStep, calculatedPostPaddingMins.durationToleranceMinutes(), commuteTimeInMinutes, calculatedPostPaddingMins);
 
         return getCandidateResult(resultDto);
     }
 
-    private static GetCandidateResultDTO generateGetCandidateResultDTO(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek, Recurrence taskRecurrence, boolean isBothWay, boolean isAfterTask, boolean isBeforeTask, LocalTime startTime, LocalTime latestStartTime, int bufferTimeInMinutes, int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep, int durationToleranceMinutes, int commuteTimeInMinutes)
+
+    private static GetCandidateResultDTO generateGetCandidateResultDTO(GenerateCandidateDTO dto, Set<DayOfWeek> excludedDaysOfWeek, Recurrence taskRecurrence, boolean isBothWay, boolean isAfterTask, boolean isBeforeTask, LocalTime startTime, LocalTime latestStartTime, int bufferTimeInMinutes, int startDayOffset, int latestDayOffset, int taskDurationInMinutes, int incrementalStep, int durationToleranceMinutes, int commuteTimeInMinutes, PostPaddingMins postPaddingMins)
     {
         GetCandidateResultDTO resultDto = new GetCandidateResultDTO();
 
@@ -116,6 +119,7 @@ public class SchedulerService
         resultDto.setIncrementalStep(incrementalStep);
         resultDto.setDurationToleranceMinutes(durationToleranceMinutes);
         resultDto.setCommuteTimeInMinutes(commuteTimeInMinutes);
+        resultDto.setPostPaddingMins(postPaddingMins);
         return resultDto;
     }
 
@@ -174,13 +178,10 @@ public class SchedulerService
             int actualEndDayOffset = cursorDayOffset + endShift.dayOffset();
             LocalTime actualCandidateEnd = endShift.time();
 
-            int postPaddingMinutes = resultDto.getBufferTimeInMinutes() + resultDto.getDurationToleranceMinutes();
-            if (resultDto.isAfterTask() || resultDto.isBothWay())
-            {
-                postPaddingMinutes += resultDto.getCommuteTimeInMinutes();
-            }
 
-            ShiftedTime paddedEndShift = shift(actualCandidateEnd, postPaddingMinutes);
+            PostPaddingMins calculatedPostPaddingMins = resultDto.getPostPaddingMins();
+
+            ShiftedTime paddedEndShift = shift(actualCandidateEnd, calculatedPostPaddingMins.postPaddingMinutes());
             int paddedEndDayOffset = actualEndDayOffset + paddedEndShift.dayOffset();
             LocalTime paddedCandidateEnd = paddedEndShift.time();
 
@@ -219,7 +220,7 @@ public class SchedulerService
 
     }
 
-    private final RecurrenceInterpreters recurrenceInterpreters ;
+    private final RecurrenceInterpreters recurrenceInterpreters;
 
     public PlacementResult placeTask(PlaceTaskDTO placementDto)
     {
@@ -258,28 +259,41 @@ public class SchedulerService
                     placedSlots.add(result.get().actualRange());
                     claimedDays.add(candidateDay);
                     placed = true;
+                    log.debug("Placed {} on {}", placementDto.getTask().getTaskName(), candidateDay);
                     break;
                 }
 
-                if (!allowFallback) { break; }
+                if (!allowFallback)
+                {
+                    break;
+                }
 
                 Optional<DayOfWeek> next = fallbackPool.stream()
                         .filter(d -> !claimedDays.contains(d))
                         .findFirst();
 
-                if (next.isEmpty()) { break; } // no untried, unclaimed day left
+                if (next.isEmpty())
+                {
+                    break;
+                } // no untried, unclaimed day left
+
+                log.debug("{} blocked on {}, trying fallback day {}", placementDto.getTask().getTaskName(), candidateDay, next.get());
 
                 candidateDay = next.get();
                 claimedDays.add(candidateDay); // mark as attempted so it won't be retried by another occurrence
             }
 
-            if (!placed) { failedDays.add(originalDay); }
+            if (!placed)
+            {
+                log.warn("{} failed to place on {}", placementDto.getTask().getTaskName(), originalDay);
+                failedDays.add(originalDay);
+            }
         }
 
         return new PlacementResult(targetDays.size(), placedSlots.size(), placedSlots, failedDays);
     }
 
-    private final PriorityInterpreter priorityInterpreter ;
+    private final PriorityInterpreter priorityInterpreter;
 
     public Map<Task, PlacementResult> placeAll(List<Task> tasks, Profile profile, LocalDateTime now)
     {

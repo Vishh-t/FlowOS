@@ -50,6 +50,9 @@ public class JwtFilter extends OncePerRequestFilter
             UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(user, null, Collections.emptyList());
 
             SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+        } catch (NotFoundException ex)
+        {
+            log.warn("JWT referenced a deleted/missing user: {}", ex.getMessage());
         } catch (Exception ex)
         {
             log.debug("JWT validation failed: {}", ex.getMessage());

@@ -6,6 +6,7 @@ import org.example.flowos.Exceptions.UnauthorizedUserException;
 import org.example.flowos.Task.DTO.CreateTaskDTO;
 import org.example.flowos.Task.Entity.Task;
 import org.example.flowos.Task.Helper.TaskCreationHelpers;
+import org.example.flowos.Task.Repository.TaskInstanceRepo;
 import org.example.flowos.Task.Repository.TaskRepo;
 import org.example.flowos.User.Entity.User;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,7 @@ import java.util.UUID;
 public class TaskService
 {
     private final TaskRepo repo;
+    private final TaskInstanceRepo taskInstanceRepo;
 
     public Task getTaskByUser(UUID taskId, User user)
     {
@@ -67,6 +69,7 @@ public class TaskService
             throw new UnauthorizedUserException("You are not authorized to perform this action");
         }
 
+        taskInstanceRepo.deleteAllByTask(storedTask);
         repo.delete(storedTask);
     }
 }

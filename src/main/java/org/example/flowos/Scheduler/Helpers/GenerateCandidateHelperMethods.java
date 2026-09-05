@@ -1,5 +1,7 @@
 package org.example.flowos.Scheduler.Helpers;
 
+import org.example.flowos.Scheduler.DTOs.GenerateCandidateDTO;
+import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -30,6 +32,27 @@ public class GenerateCandidateHelperMethods
     public static int daysUntilNextOccurrence(DayOfWeek from, DayOfWeek target)
     {
         return ((target.getValue() - from.getValue()) % 7 + 7) % 7;
+    }
+
+    public static  PostPaddingMins getPostPaddingMins(GenerateCandidateDTO dto, boolean isAfterTask, boolean isBothWay, int commuteTimeInMinutes)
+    {
+        int bufferTimeInMinutes = dto.getTask().getEvent().getBufferTimeInMinutes();
+
+        int durationToleranceMinutes = dto.getTask().getEvent().getTime().getDurationToleranceMinutes();
+
+        int postPaddingMinutes = bufferTimeInMinutes + durationToleranceMinutes;
+
+
+        if (isAfterTask || isBothWay)
+        {
+            postPaddingMinutes += commuteTimeInMinutes;
+        }
+
+        return new PostPaddingMins(bufferTimeInMinutes, durationToleranceMinutes, postPaddingMinutes);
+    }
+
+    public record PostPaddingMins(int bufferTimeInMinutes, int durationToleranceMinutes, int postPaddingMinutes)
+    {
     }
 
 }
